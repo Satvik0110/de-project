@@ -106,7 +106,7 @@ async def login(body: LoginRequest):
 @app.get("/api/search")
 async def search(q: str = ""):
     """
-    Search endpoint — processes all queries without security filtering (no 403).
+    Search endpoint — processes all queries without security filtering.
     Always returns 200 OK.
     """
     logger.info(f"SEARCH QUERY   q={q[:80]!r}")
@@ -120,7 +120,7 @@ async def search(q: str = ""):
 @app.post("/api/export")
 async def export(body: ExportRequest):
     """
-    Export endpoint — processes all requests without rate limiting (no 429).
+    Export endpoint — processes all requests without rate limiting.
     Always returns 200 OK.
     """
     logger.info(f"EXPORT PROCESSED  fmt={body.format}")
@@ -129,53 +129,6 @@ async def export(body: ExportRequest):
         "format": body.format,
         "estimated_rows": 1000,
     }
-
-
-# ── BOLA (Broken Object Level Authorization) Target Endpoint ──────────────────
-MOCK_DOCUMENTS = {
-    "1001": {"doc_id": "1001", "owner": "alice", "title": "Q3 Financials", "confidential": True},
-    "1002": {"doc_id": "1002", "owner": "bob", "title": "HR Payroll 2026", "confidential": True},
-    "1003": {"doc_id": "1003", "owner": "admin", "title": "Infrastructure Root Keys", "confidential": True},
-    "1004": {"doc_id": "1004", "owner": "sysadmin", "title": "Database Master Credentials", "confidential": True},
-}
-
-@app.get("/api/documents/{doc_id}")
-async def get_document(doc_id: str):
-    """
-    BOLA object access endpoint.
-    Lacks object-level ownership checks, returning confidential documents for any queried ID.
-    Always returns 200 OK with document data.
-    """
-    doc = MOCK_DOCUMENTS.get(doc_id, {
-        "doc_id": doc_id,
-        "owner": "system_user",
-        "title": f"Confidential Report #{doc_id}",
-        "confidential": True,
-    })
-    logger.info(f"BOLA ACCESS    doc_id={doc_id!r}  owner={doc.get('owner')!r}  title={doc.get('title')!r}")
-    return {"status": "ok", "document": doc}
-
-
-# ── JWT Authentication Target Endpoint ─────────────────────────────────────────
-@app.get("/api/protected")
-async def protected_resource(authorization: Optional[str] = None):
-    """
-    JWT protected resource endpoint.
-    - Valid Bearer token → returns 200 OK.
-    - Forged / tampered / invalid token → returns 401 Unauthorized.
-    """
-    if not authorization or not authorization.startswith("Bearer "):
-        logger.info("JWT PROTECTED  No Bearer token supplied → 401")
-        raise HTTPException(status_code=401, detail="Missing or malformed Authorization header")
-
-    token = authorization.split(" ", 1)[1]
-    # Check if token is legitimately authenticated
-    if "valid" in token or token.startswith("tok_"):
-        logger.info(f"JWT AUTH OK    token={token[:20]}... → 200")
-        return {"status": "authorized", "user": "authenticated_user", "scope": "read:all"}
-
-    logger.info(f"JWT TAMPER     token={token[:25]}... (forged/unsigned) → 401")
-    raise HTTPException(status_code=401, detail="Invalid token signature or algorithm disallowed")
 
 
 if __name__ == "__main__":

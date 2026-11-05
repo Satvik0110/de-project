@@ -20,9 +20,9 @@ export default function App() {
     only_attacks: true,
     active_scenario: 'all',
     selected_scenarios: [
-      'auth_brute_force', 'auth_jwt_tampering',
+      'auth_brute_force', 'auth_password_spray',
       'api_injection_probe', 'api_rate_limit',
-      'network_port_scan', 'network_slowloris'
+      'network_port_scan', 'network_connection_flood'
     ],
 
     target_base_url: 'http://localhost:8002',

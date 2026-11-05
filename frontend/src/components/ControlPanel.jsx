@@ -70,6 +70,36 @@ export default function ControlPanel({ config, onUpdateConfig }) {
           />
         </div>
 
+        {/* Traffic Generation Mode */}
+        <div className="control-group">
+          <div className="control-label">
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+              Traffic Generation Mode
+            </span>
+            <span className="slider-val-badge" style={{ color: config.only_attacks ? 'var(--status-denied)' : 'var(--accent-cyan)' }}>
+              {config.only_attacks ? '100% Selected Attacks' : 'Mixed Baseline'}
+            </span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.4rem', marginTop: '0.2rem' }}>
+            <button
+              type="button"
+              className={`filter-btn ${config.only_attacks ? 'active' : ''}`}
+              style={{ padding: '0.35rem 0.5rem', fontSize: '0.72rem', justifyContent: 'center' }}
+              onClick={() => onUpdateConfig({ ...config, only_attacks: true, attack_ratio: 1.0 })}
+            >
+              Only Selected Attacks
+            </button>
+            <button
+              type="button"
+              className={`filter-btn ${!config.only_attacks ? 'active' : ''}`}
+              style={{ padding: '0.35rem 0.5rem', fontSize: '0.72rem', justifyContent: 'center' }}
+              onClick={() => onUpdateConfig({ ...config, only_attacks: false, attack_ratio: 0.5 })}
+            >
+              Mix with Normal Traffic
+            </button>
+          </div>
+        </div>
+
         {/* Multiple Choice Attack Selection */}
         <div className="control-group">
           <div className="control-label">
@@ -79,17 +109,17 @@ export default function ControlPanel({ config, onUpdateConfig }) {
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <span className="slider-val-badge" style={{ color: 'var(--accent-cyan)' }}>
                 {(config.selected_scenarios || [
-                  'auth_brute_force', 'auth_jwt_tampering',
+                  'auth_brute_force', 'auth_password_spray',
                   'api_injection_probe', 'api_rate_limit',
-                  'network_port_scan', 'network_slowloris'
+                  'network_port_scan', 'network_connection_flood'
                 ]).length} / 6 Active
               </span>
               <button
                 type="button"
                 onClick={() => handleChange('selected_scenarios', [
-                  'auth_brute_force', 'auth_jwt_tampering',
+                  'auth_brute_force', 'auth_password_spray',
                   'api_injection_probe', 'api_rate_limit',
-                  'network_port_scan', 'network_slowloris'
+                  'network_port_scan', 'network_connection_flood'
                 ])}
                 style={{ fontSize: '0.68rem', color: 'var(--accent-cyan)', textDecoration: 'underline' }}
               >
@@ -112,13 +142,13 @@ export default function ControlPanel({ config, onUpdateConfig }) {
                 category: 'Authorisation',
                 items: [
                   { id: 'auth_brute_force', label: 'Credential Brute Force' },
-                  { id: 'auth_jwt_tampering', label: 'JWT Token Tampering' }
+                  { id: 'auth_password_spray', label: 'Horizontal Password Spray' }
                 ]
               },
               {
                 category: 'API',
                 items: [
-                  { id: 'api_injection_probe', label: 'SQL and Command Injection' },
+                  { id: 'api_injection_probe', label: 'Diverse Injection Probes' },
                   { id: 'api_rate_limit', label: 'Rate Limit Exhaustion' }
                 ]
               },
@@ -126,14 +156,14 @@ export default function ControlPanel({ config, onUpdateConfig }) {
                 category: 'Network',
                 items: [
                   { id: 'network_port_scan', label: 'Port Sweep Scan' },
-                  { id: 'network_slowloris', label: 'Slowloris Starvation' }
+                  { id: 'network_connection_flood', label: 'TCP Connection Flood' }
                 ]
               }
             ].map((group) => {
               const currentSelected = config.selected_scenarios || [
-                'auth_brute_force', 'auth_jwt_tampering',
+                'auth_brute_force', 'auth_password_spray',
                 'api_injection_probe', 'api_rate_limit',
-                'network_port_scan', 'network_slowloris'
+                'network_port_scan', 'network_connection_flood'
               ];
 
 

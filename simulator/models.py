@@ -49,16 +49,16 @@ class SimulatorConfig(BaseModel):
     """Configuration for active simulator operation."""
     running: bool = False
     events_per_second: float = 10.0
-    attack_ratio: float = 0.3           # 30% attacks, 70% normal — realistic mixed traffic
-    only_attacks: bool = False          # Mix normal baseline events with attacks for realistic signal-to-noise
+    attack_ratio: float = 1.0           # 1.0 = 100% attacks matching selected_scenarios
+    only_attacks: bool = True           # Pure attack mode: only generate user-selected attack scenarios
     active_scenario: str = "all"        # fallback for backwards compatibility
     selected_scenarios: List[str] = Field(default_factory=lambda: [
         "auth_brute_force",
-        "auth_jwt_tampering",
+        "auth_password_spray",
         "api_injection_probe",
         "api_rate_limit",
         "network_port_scan",
-        "network_slowloris",
+        "network_connection_flood",
     ])
     target_base_url: str = "http://localhost:8002"  # URL of the target web app being attacked
     target_ip: str = "10.0.0.5"         # Display field — shown in frontend (not used by attack engine)
@@ -72,11 +72,11 @@ class AttackTriggerRequest(BaseModel):
     """Request to trigger an explicit attack burst."""
     scenario: Literal[
         "auth_brute_force",
-        "auth_jwt_tampering",
+        "auth_password_spray",
         "api_injection_probe",
         "api_rate_limit",
         "network_port_scan",
-        "network_slowloris",
+        "network_connection_flood",
         "api_sql_injection",   # legacy alias — maps to api_injection_probe
     ]
     burst_count: int = 50

@@ -74,14 +74,14 @@ export default function AttackArsenal({ onTriggerAttack, targetBaseUrl = 'http:/
           </button>
 
           <button
-            className={`btn-attack ${triggering === 'auth_jwt_tampering' ? 'pulse' : ''}`}
-            onClick={() => handleLaunch('auth_jwt_tampering')}
+            className={`btn-attack ${triggering === 'auth_password_spray' ? 'pulse' : ''}`}
+            onClick={() => handleLaunch('auth_password_spray')}
           >
             <div className="attack-btn-top">
-              <span className="attack-btn-title">JWT Token Tampering</span>
+              <span className="attack-btn-title">Horizontal Password Spray</span>
             </div>
             <div className="attack-btn-desc">
-              Cryptographic signature stripping, algorithm none forgery, and privilege claim manipulation in Bearer tokens.
+              Multi-user authentication attack testing common passwords across accounts to evade single-user lockouts.
             </div>
           </button>
         </div>
@@ -96,10 +96,10 @@ export default function AttackArsenal({ onTriggerAttack, targetBaseUrl = 'http:/
             onClick={() => handleLaunch('api_injection_probe')}
           >
             <div className="attack-btn-top">
-              <span className="attack-btn-title">SQL and Command Injection Probe</span>
+              <span className="attack-btn-title">Diverse API Injection Probes</span>
             </div>
             <div className="attack-btn-desc">
-              Automated vulnerability probing for SQL injection, path traversal, NoSQL, and command injection patterns.
+              Automated probing across SQLi, command injection, path traversal, NoSQL, SSTI, XSS, and CRLF patterns.
             </div>
           </button>
 
@@ -108,10 +108,10 @@ export default function AttackArsenal({ onTriggerAttack, targetBaseUrl = 'http:/
             onClick={() => handleLaunch('api_rate_limit')}
           >
             <div className="attack-btn-top">
-              <span className="attack-btn-title">Rate Limit Exhaustion</span>
+              <span className="attack-btn-title">Rate Limit Exhaustion (Concurrent Flood)</span>
             </div>
             <div className="attack-btn-desc">
-              Rapid concurrent request flooding against compute-intensive endpoints to test rate limiting policies.
+              Rapid concurrent request flooding against export endpoints to test rate limiting policies.
             </div>
           </button>
         </div>
@@ -129,19 +129,19 @@ export default function AttackArsenal({ onTriggerAttack, targetBaseUrl = 'http:/
               <span className="attack-btn-title">Horizontal and Vertical Port Sweep</span>
             </div>
             <div className="attack-btn-desc">
-              Multi-port TCP SYN connection sweep probing common administration and service ports.
+              Multi-port TCP connection sweep probing active target services and common administration ports.
             </div>
           </button>
 
           <button
-            className={`btn-attack ${triggering === 'network_slowloris' ? 'pulse' : ''}`}
-            onClick={() => handleLaunch('network_slowloris')}
+            className={`btn-attack ${triggering === 'network_connection_flood' ? 'pulse' : ''}`}
+            onClick={() => handleLaunch('network_connection_flood')}
           >
             <div className="attack-btn-top">
-              <span className="attack-btn-title">Slowloris Connection Starvation</span>
+              <span className="attack-btn-title">TCP Connection Flood</span>
             </div>
             <div className="attack-btn-desc">
-              Low-bandwidth attack transmitting fragmented HTTP headers to exhaust server connection slots.
+              High-volume concurrent TCP socket handshake flood evaluating connection backlog and pool capacity.
             </div>
           </button>
         </div>
