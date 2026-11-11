@@ -1,12 +1,34 @@
-venv/
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+*.env
+
+# Node / Frontend
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
 
 # Kafka distribution (130MB) and its data - teammates re-download
 infra/kafka/
 infra/kafka-data/
-*.log
+
+# Reports
 *.pdf
-*.txt
-Lab678_Group4.md
 *.pptx
+Lab678_Group4.md
