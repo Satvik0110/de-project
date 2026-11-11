@@ -95,19 +95,3 @@ input, select {
   font-family: inherit;
   color: inherit;
 }
-
-/* Pulse animation */
-@keyframes pulse-glow {
-  0%, 100% {
-    opacity: 1;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.6;
-    transform: scale(0.96);
-  }
-}
-
-.pulse {
-  animation: pulse-glow 2s infinite ease-in-out;
-}

@@ -28,6 +28,6 @@ MAX_FUTURE_S = float(os.getenv("MAX_FUTURE_S", "60"))
 
 # --- housekeeping -------------------------------------------------------------
 COMMIT_INTERVAL_S = float(os.getenv("COMMIT_INTERVAL_S", "2"))
-METRICS_INTERVAL_S = float(os.getenv("METRICS_INTERVAL_S", "10"))
+METRICS_INTERVAL_S = float(os.getenv("METRICS_INTERVAL_S", "5"))
 # Event ids kept on each alert, so an analyst can trace it back to raw events.
 SAMPLE_IDS_PER_ALERT = int(os.getenv("SAMPLE_IDS_PER_ALERT", "10"))

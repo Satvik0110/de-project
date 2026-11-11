@@ -9,10 +9,12 @@ engine fire an alert the moment a threshold is crossed instead of waiting for th
 window to close, with no risk of having to retract it later.
 
 The set is limited to what our event schema can actually support. Rules needing
-fields we do not have (geo-location, bytes transferred, URL path) are left out
-rather than approximated.
+fields we do not have (geo-location, bytes transferred) are left out rather than
+approximated. Each rule is tagged with its MITRE ATT&CK technique and tactic, which
+is what lets alerts from one attacker be read as stages of one intrusion.
 """
 import os
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
@@ -54,6 +56,8 @@ class Rule:
     threshold: int
     applies: Callable[[Event], bool]
     key_fields: tuple[str, ...]
+    technique: str                           # MITRE ATT&CK id + name
+    tactic: str                              # MITRE ATT&CK tactic
     measure: str = "count"                   # count | distinct | fail_then_success
     distinct_of: Optional[Callable[[Event], Any]] = None
 
@@ -100,12 +104,33 @@ def _auth_fail(ev: Event) -> bool:
     return ev.source_type == "auth" and ev.status != "success"
 
 
+# Attack-pattern signatures, matched against the decoded request line. They describe
+# the payload classes OWASP lists for injection: SQL, OS command, path traversal,
+# NoSQL operator, template, script, LDAP filter and header (CRLF) injection.
+INJECTION = re.compile("|".join([
+    r"'\s*(or|and)\s", r"union\s+select", r"@@version", r"waitfor\s+delay", r"'\s*--",
+    r"[;|&]\s*(cat|id|whoami|ping|powershell|wget|curl)\b",
+    r"\.\.[/\\]",
+    r"\[\$(ne|gt|lt|regex)\]", r"\$where",
+    r"\{\{.*\}\}", r"\$\{.*\}",
+    r"<script", r"onerror\s*=",
+    r"\*\)\(",
+    r"[\r\n]",
+]), re.IGNORECASE)
+
+
+def is_injection(ev: Event) -> bool:
+    return ev.request is not None and INJECTION.search(ev.request) is not None
+
+
 def default_rules() -> list[Rule]:
     return [
         # --- authentication ---------------------------------------------------
         Rule(
             name="brute_force",
             description="Repeated failed logins from one source against one account",
+            technique="T1110.001 Password Guessing",
+            tactic="Credential Access",
             severity="high",
             threshold=_threshold("brute_force", 5),
             applies=_auth_fail,
@@ -114,6 +139,8 @@ def default_rules() -> list[Rule]:
         Rule(
             name="password_spray",
             description="One source failing logins across many different accounts",
+            technique="T1110.003 Password Spraying",
+            tactic="Credential Access",
             severity="high",
             threshold=_threshold("password_spray", 5),
             applies=lambda ev: _auth_fail(ev) and ev.user is not None,
@@ -124,6 +151,8 @@ def default_rules() -> list[Rule]:
         Rule(
             name="brute_force_success",
             description="Failed logins followed by a successful one: likely compromised account",
+            technique="T1078 Valid Accounts",
+            tactic="Initial Access",
             severity="critical",
             threshold=_threshold("brute_force_success", 5),
             applies=lambda ev: ev.source_type == "auth",
@@ -133,6 +162,8 @@ def default_rules() -> list[Rule]:
         Rule(
             name="distributed_brute_force",
             description="One account failing logins from many different sources",
+            technique="T1110 Brute Force",
+            tactic="Credential Access",
             severity="high",
             threshold=_threshold("distributed_brute_force", 5),
             applies=lambda ev: _auth_fail(ev) and ev.user is not None,
@@ -144,6 +175,8 @@ def default_rules() -> list[Rule]:
         Rule(
             name="port_scan",
             description="One source probing many ports on one host (vertical scan)",
+            technique="T1046 Network Service Discovery",
+            tactic="Discovery",
             severity="medium",
             threshold=_threshold("port_scan", 10),
             applies=lambda ev: ev.source_type == "network" and ev.dest_port is not None,
@@ -152,8 +185,20 @@ def default_rules() -> list[Rule]:
             distinct_of=lambda ev: ev.dest_port,
         ),
         Rule(
+            name="connection_flood",
+            description="One source opening many connections to one service (resource exhaustion)",
+            technique="T1499 Endpoint Denial of Service",
+            tactic="Impact",
+            severity="medium",
+            threshold=_threshold("connection_flood", 30),
+            applies=lambda ev: ev.source_type == "network" and ev.dest_port is not None,
+            key_fields=("src_ip", "dest_ip", "dest_port"),
+        ),
+        Rule(
             name="host_sweep",
             description="One source contacting many hosts (horizontal scan)",
+            technique="T1046 Network Service Discovery",
+            tactic="Discovery",
             severity="medium",
             threshold=_threshold("host_sweep", 10),
             applies=lambda ev: ev.source_type == "network" and ev.dest_ip is not None,
@@ -163,8 +208,20 @@ def default_rules() -> list[Rule]:
         ),
         # --- api ----------------------------------------------------------------
         Rule(
+            name="injection_probe",
+            description="Requests carrying injection payloads (SQLi, command, traversal, template, XSS...)",
+            technique="T1190 Exploit Public-Facing Application",
+            tactic="Initial Access",
+            severity="medium",
+            threshold=_threshold("injection_probe", 1),
+            applies=is_injection,
+            key_fields=("src_ip",),
+        ),
+        Rule(
             name="api_flood",
             description="Abnormally high API request rate from one source",
+            technique="T1499 Endpoint Denial of Service",
+            tactic="Impact",
             severity="medium",
             threshold=_threshold("api_flood", 50),
             applies=lambda ev: ev.source_type == "api",
@@ -173,6 +230,8 @@ def default_rules() -> list[Rule]:
         Rule(
             name="api_access_probing",
             description="Many denied or failed API calls from one source (enumeration / authz probing)",
+            technique="T1595 Active Scanning",
+            tactic="Reconnaissance",
             severity="medium",
             threshold=_threshold("api_access_probing", 10),
             applies=lambda ev: ev.source_type == "api" and ev.status != "success",

@@ -25,7 +25,7 @@ import logging
 import signal
 import sys
 import time
-from collections import Counter
+from collections import Counter, deque
 
 from confluent_kafka import Consumer, KafkaError, KafkaException, Producer, TopicPartition
 
@@ -70,6 +70,12 @@ class Outputs:
     def flush(self, timeout: float = 10.0) -> bool:
         """True once everything sent so far is acknowledged."""
         return self.producer.flush(timeout) == 0 and self.failed == 0
+
+
+def pct(values, *qs) -> dict:
+    """Nearest-rank percentiles, e.g. pct(xs, 50, 95) -> {"p50": .., "p95": ..}."""
+    v = sorted(values)
+    return {f"p{q}": round(v[min(len(v) - 1, int(q / 100 * len(v)))], 1) for q in qs}
 
 
 def print_alert(a: dict) -> None:
@@ -145,13 +151,21 @@ def main() -> int:
         if a["trigger"] == "early" and a["detection_latency_ms"] is not None:
             latencies.append(a["detection_latency_ms"])
 
-    latencies: list[float] = []
+    # Detection latency over the last 500 alerts (alerts are bursty; a per-interval figure
+    # would be empty most of the time). Stage latencies are per interval, sampled per event:
+    #   ingest     = ingest_time - event_time   (source -> log shipper -> ingest API)
+    #   processing = processed   - ingest_time  (Kafka + processor queueing)
+    latencies: deque = deque(maxlen=500)
+    ingest_ms: list[float] = []
+    processing_ms: list[float] = []
     last_input = last_commit = last_metrics = time.time()
     prev_stats: Counter = Counter()
 
     try:
         while running:
-            msgs = consumer.consume(num_messages=500, timeout=0.5)
+            # consume() returns early once 500 records are ready, so the timeout only bounds the
+            # wait at low rates: it sits directly on detection latency, so keep it short.
+            msgs = consumer.consume(num_messages=500, timeout=0.1)
             now = time.time()
             if msgs:
                 last_input = now
@@ -174,6 +188,9 @@ def main() -> int:
                     })
                     log.warning("invalid record p%s@%s -> DLQ: %s", msg.partition(), msg.offset(), exc)
                     continue
+                if ev.ingest_ts:
+                    ingest_ms.append((ev.ingest_ts - ev.ts) * 1000)
+                    processing_ms.append((now - ev.ingest_ts) * 1000)
                 for a in engine.add(ev, now, msg.partition(), msg.offset()):
                     emit_alert(a)
 
@@ -202,22 +219,27 @@ def main() -> int:
                     "at": iso(now), "group": args.group, "interval_s": round(elapsed, 1),
                     "events_per_s": round((delta["accepted"] + delta["duplicate"] + delta["late"]
                                            + delta["invalid"]) / elapsed, 1),
-                    "totals": dict(engine.stats),
+                    "totals": {**dict.fromkeys(("accepted", "duplicate", "late", "invalid", "alerts"), 0),
+                               **engine.stats},
                     "interval": dict(delta),
                     "watermark": iso(engine.watermark) if engine.watermark > 0 else None,
                     "watermark_delay_s": round(now - engine.watermark, 1) if engine.watermark > 0 else None,
                     "consumer_lag": lag,
                     "detection_latency_ms": {
-                        "avg": round(sum(latencies) / len(latencies), 1),
-                        "max": round(max(latencies), 1),
+                        **pct(latencies, 50, 95, 99), "max": round(max(latencies), 1), "n": len(latencies),
                     } if latencies else None,
+                    "stage_latency_ms": {
+                        "ingest": pct(ingest_ms, 50, 95), "processing": pct(processing_ms, 50, 95),
+                    } if ingest_ms else None,
+                    "alerts_by_rule": dict(engine.alerts_by_rule),
                     **engine.state_size(),
                 }
                 out.send(config.TOPIC_METRICS, m)
                 log.info("metrics: %.1f ev/s | %s | lag=%d | %s", m["events_per_s"],
                          ", ".join(f"{k}={v}" for k, v in sorted(m["totals"].items())),
                          lag, engine.state_size())
-                prev_stats, latencies, last_metrics = Counter(engine.stats), [], now
+                prev_stats, last_metrics = Counter(engine.stats), now
+                ingest_ms, processing_ms = [], []
     finally:
         try:
             commit()

@@ -32,6 +32,8 @@ create security.events.dlq 1
 create security.alerts 1
 create security.aggregates 1
 create security.pipeline.metrics 1
+# ground truth from the attack simulator: read only by the detection scoreboard
+create security.sim.campaigns 1
 
 echo
 "$KT" --bootstrap-server "$BOOTSTRAP" --list

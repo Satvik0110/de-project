@@ -32,3 +32,10 @@ infra/kafka-data/
 *.pdf
 *.pptx
 Lab678_Group4.md
+
+# Parquet data lake (generated)
+data_lake/
+.env
+
+# runtime logs and pid files (scripts/start.sh)
+logs/

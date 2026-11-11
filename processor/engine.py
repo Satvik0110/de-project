@@ -98,6 +98,7 @@ class WindowEngine:
         self.last_alert: dict[tuple, tuple[int, int]] = {} # (rule, key) -> (start, end) pane idx
         self.last_offset: dict[int, int] = {}              # partition -> last offset handled
         self.stats: Counter = Counter()
+        self.alerts_by_rule: Counter = Counter()
 
     # ------------------------------------------------------------------ input
 
@@ -223,6 +224,8 @@ class WindowEngine:
             "rule_name": rule.name,
             "description": rule.description,
             "severity": rule.severity_for(value),
+            "technique": rule.technique,
+            "tactic": rule.tactic,
             "entity": entity,
             "src_ip": named.get("src_ip"),
             "user": named.get("user"),
@@ -243,6 +246,7 @@ class WindowEngine:
         self.fired[(rule.name, key, start)] = FiredAlert(alert, value, alert["severity"])
         self.last_alert[(rule.name, key)] = (start, start + self.k)
         self.stats["alerts"] += 1
+        self.alerts_by_rule[rule.name] += 1
         return dict(alert)
 
     def _update(self, fired: FiredAlert, rule, st, value, now, trigger) -> dict:

@@ -285,3 +285,42 @@ def test_restore_drops_events_of_already_emitted_windows():
     second.restore(cp["closed_before"])
     assert second.add(ev(T0 + 1), T0 + 1000) == []
     assert second.stats["late"] == 1
+
+
+# ------------------------------------------------- new rules / enrichment
+
+def test_parse_decodes_request_line_from_raw_payload():
+    e = parse_event(raw(source_type="api", raw_payload={"path": "/api/search", "query": "q=%27+OR+%271%27%3D%271"}),
+                    NOW, 60)
+    assert e.request == "/api/search?q=' OR '1'='1"
+
+
+@pytest.mark.parametrize("q", ["' OR '1'='1' --", "../../etc/passwd", "{{7*7}}", "id; cat /etc/passwd",
+                               "<script>alert(1)</script>", "admin[$ne]=x", "*)(uid=*"])
+def test_injection_probe_fires_on_first_payload(q):
+    e = engine()
+    alerts = feed(e, [api_req(q)])
+    assert rules_fired(alerts) == ["injection_probe"]
+    assert alerts[0]["technique"].startswith("T1190") and alerts[0]["tactic"] == "Initial Access"
+
+
+@pytest.mark.parametrize("q", ["monthly report", "O'Brien and co", "orders 2026", "invoice 1043"])
+def test_benign_queries_are_not_injection(q):
+    assert feed(engine(), [api_req(q)]) == []
+
+
+def test_connection_flood_vs_port_scan():
+    e = engine()
+    flood = [ev(T0 + i * 0.05, source="network", status="success", user=None, dest="127.0.10.1", port=8080)
+             for i in range(35)]
+    assert rules_fired(feed(e, flood)) == ["connection_flood"]
+
+
+def test_every_rule_is_tagged_with_attack():
+    assert all(r.technique.startswith("T1") and r.tactic for r in default_rules())
+
+
+def api_req(q):
+    from dataclasses import replace
+    return replace(ev(T0, source="api", status="success", user=None, ip="127.66.0.9"),
+                   request=f"/api/search?q={q}")

@@ -1,299 +1,204 @@
-# Real-Time Cybersecurity Event Analytics Platform — Ingestion + Stream Processing
+# Real-Time Cybersecurity Event Analytics Platform
 
 Group 4 (B23EE1094, B23ES1032, B23EE1041)
 
-This repo contains the **ingestion layer** (HTTP event API + Kafka) and the **stream
-processor** (FR2): event-time sliding windows, watermark, dedup and detection rules.
+A stream-first SIEM. A red-team simulator runs real attacks against a lab network. The
+defended systems log what they observe. A stream processor detects attacks within tens of
+milliseconds of ingest. Everything is stored in a Parquet lake and a PostgreSQL warehouse,
+and a SOC dashboard shows detections, multi-stage incidents with AI summaries, pipeline
+health, and a scoreboard that grades detection against the simulator's ground truth.
 
 ```
-Attack Simulator  --HTTP-->  Ingest API  --produce-->  Kafka  --consume-->  Stream Processor  -->  security.alerts
- (FR1; mock for now)          [ingest/]              [infra/]               [processor/]          security.aggregates
-                                                                                                  security.pipeline.metrics
+ RED TEAM                     DEFENDED NETWORK (127.0.10.x)                BLUE TEAM
+ ┌──────────────┐  HTTP   ┌───────────────────┐
+ │ Simulator    │────────▶│ Target web app    │──┐ access log
+ │ :8001        │  TCP    ├───────────────────┤  │ (log shipper:
+ │ attackers    │────────▶│ Network sensor    │──┤  queue + retry)
+ │ 127.66.x.x   │         └───────────────────┘  ▼
+ │ employees    │                        ┌──────────────┐   security.events.raw   ┌──────────────────┐
+ │ 127.0.1.x    │                        │ Ingest API   │────────────────────────▶│ Stream processor │
+ └──────┬───────┘                        │ :8000        │      (Kafka, 3 parts)   │ windows, dedup,  │
+        │ ground truth                   └──────────────┘            │            │ 10 rules, ATT&CK │
+        │ security.sim.campaigns                                     ▼            └────────┬─────────┘
+        │                                                     ┌─────────────┐   alerts, aggregates,
+        │                                                     │ Lake writer │   pipeline.metrics
+        │                                                     │ Parquet     │            │
+        │                                                     └─────────────┘            ▼
+        │                                                                     ┌────────────────────┐
+        └────────────────────────────────────────────────────────────────────▶│ Warehouse writer   │
+                                                                              │ PostgreSQL         │
+ ┌──────────────┐                     ┌────────────────────────────┐          │ + incident chains  │
+ │ Red console  │                     │ Dashboard API :8003        │◀─────────┴────────────────────┘
+ │ :5173        │                     │ live: WebSocket from Kafka │──▶ SOC dashboard :5174
+ └──────────────┘                     │ history: SQL; LLM summaries│
+                                      └────────────────────────────┘
 ```
-
-The Parquet data lake and PostgreSQL warehouse (FR3) are not built yet. Until then the
-processor publishes its outputs to Kafka topics, which the FR3 writers will consume.
 
 ---
 
-## What exists
+## Components
 
-| Path | Purpose |
+| Path | What it is |
 |---|---|
-| `contracts/event.schema.json` | The frozen event contract. Simulator and API both code against this. |
-| `ingest/` | FastAPI ingest service + Kafka producer |
-| `processor/` | Stream processor (FR2): parse, window, dedup, detect, publish |
-| `tools/mock_traffic.py` | Mock traffic: normal background + every attack scenario |
-| `consumer/test_consumer.py` | Prints incoming events. Verification only. |
-| `tests/smoke_test.py` | End-to-end check of ingest |
-| `tests/test_processor.py` | Unit tests for the processor (pytest, no Kafka) |
-| `tests/e2e_processor.py` | End-to-end check: API -> Kafka -> processor -> alerts |
-| `infra/*.sh` | Kafka download, config, start/stop, topic creation |
+| `simulator/` | **Red team.** 9 attack scenarios plus normal employee traffic. It only *acts*: every actor connects from its own real source IP (Linux routes all of `127.0.0.0/8` to loopback). It publishes ground truth (campaign, attacker IPs, expected rules) to `security.sim.campaigns`. |
+| `frontend/` | Red-team console: launch attacks, toggle background traffic and "unreliable network", live attack log. |
+| `target/` | The **defended web app** (`/login`, `/api/search`, `/api/export`). Deliberately unprotected. Logs every request as a security event, using the peer IP and status code that the *server* observed. |
+| `sensor/` | **Network sensor.** Listens on the server's service ports and 20 workstations, and logs every TCP connection (open port = `success`, closed = reset and `denied`). It sees the scans the web app never would. |
+| `shipper/` | Log shipper shared by target and sensor (the role Filebeat/Fluent Bit play in production): bounded queue, retry with backoff on ingest backpressure. In chaos mode it duplicates and delays events on purpose. |
+| `ingest/` | Ingest API: validates against the frozen contract (`contracts/event.schema.json`), stamps `ingest_time`, produces to Kafka keyed by `src_ip`, sends invalid payloads to the DLQ. |
+| `processor/` | Stream processor: event-time sliding windows, watermark, dedup, 10 detection rules tagged with MITRE ATT&CK, early alerting, at-least-once with restart recovery. |
+| `lake/` | Lake writer: raw events → Snappy Parquet, Hive partitions `year=/month=/day=/hour=`. |
+| `warehouse/` | Schema, plus a writer that upserts alerts, aggregates, metrics and campaigns into PostgreSQL and chains alerts into incidents. |
+| `dashboard/` | Dashboard API (live WebSocket, SQL history, scoreboard, LLM summariser) and the SOC dashboard UI (`dashboard/ui`). |
+| `tests/` | Unit tests and three end-to-end suites (see [Testing](#testing)). |
+| `tools/mock_traffic.py` | Synthetic events posted straight to ingest. Used by the processor end-to-end test. |
 
 ### Kafka topics
 
-| Topic | Partitions | Key | Purpose |
-|---|---|---|---|
-| `security.events.raw` | 3 | `src_ip` | All valid events |
-| `security.events.dlq` | 1 | none | Payloads that failed validation (at ingest or in the processor), kept with the reason |
-| `security.alerts` | 1 | entity | Detection alerts, upsert on `alert_id` |
-| `security.aggregates` | 1 | `source_type` | Per-window counts and unique IPs/users, per source type |
-| `security.pipeline.metrics` | 1 | none | Throughput, duplicates, late drops, lag, detection latency |
+| Topic | Partitions | Producer → consumers |
+|---|---|---|
+| `security.events.raw` | 3, key `src_ip` | ingest → processor, lake writer |
+| `security.events.dlq` | 1 | ingest, processor (rejects, with reason) |
+| `security.alerts` | 1, key entity | processor → warehouse writer, dashboard |
+| `security.aggregates` | 1 | processor → warehouse writer |
+| `security.pipeline.metrics` | 1 | processor → warehouse writer, dashboard |
+| `security.sim.campaigns` | 1 | simulator → warehouse writer (scoreboard only) |
 
-Events are keyed by `src_ip` so that all events from one source IP land on the same
-partition. That preserves per-IP ordering, which is what makes per-IP brute-force
-detection correct downstream without a cross-partition shuffle.
+Each downstream service is its own consumer group, so the lake, warehouse and dashboard read
+the same stream independently and none of them slows detection.
 
 ---
 
-## Setup from a fresh clone
+## Setup (one time)
 
-Requires **Java 17+** (`java -version`) and **Python 3.10+**. Tested on Ubuntu with
-Java 21 and Python 3.12.
+Requires Linux, Java 17+, Python 3.10+, Node 18+ and PostgreSQL 16 (native, `apt install postgresql`).
 
 ```bash
-git clone <repo-url>
-cd de
-
-# 1. Python environment
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-
-# 2. Kafka: download (~130MB), apply our config, format storage. One time only.
-./infra/setup-kafka.sh
+./infra/setup-kafka.sh          # downloads Kafka 4.x (KRaft, no ZooKeeper), formats storage
+./infra/setup-postgres.sh       # asks for sudo once: creates role/db "secops", applies the schema
+npm install --prefix frontend
+npm install --prefix dashboard/ui
+cp .env.example .env            # optional: LLM key for AI incident summaries
 ```
-
-The Kafka distribution is **not** in git (130MB), which is why you download it. The
-config that matters is tracked as `infra/server.properties.template` and applied by
-the setup script.
-
----
 
 ## Running
 
-Four terminals, each with `source venv/bin/activate` where Python is involved.
-
 ```bash
-# Terminal 1 — Kafka broker (leave running)
-./infra/start-kafka.sh
-
-# one time, once the broker is up:
-./infra/create-topics.sh
-
-# Terminal 2 — ingest API
-uvicorn ingest.main:app --reload --port 8000
-
-# Terminal 3 — stream processor (prints alerts as they fire)
-python -m processor.main
-#   fast demo windows: python -m processor.main --window 10 --slide 2 --lateness 2
-
-# Terminal 4 — mock traffic: 20s of normal activity with every attack mixed in
-python -m tools.mock_traffic --scenario all
-#   python -m tools.mock_traffic --list                       # scenarios and the rules they trigger
-#   python -m tools.mock_traffic --scenario port_scan,api_flood --dup-rate 0.2 --late-rate 0.05
+./scripts/start.sh      # Kafka, topics, all 8 services and both UIs, in the background
+./scripts/stop.sh       # stop everything (--keep-kafka to leave the broker up)
+./scripts/reset.sh      # clean slate before a demo: empty topics, lake and warehouse (Kafka must be up, services stopped)
 ```
 
-`python -m consumer.test_consumer` still works for watching raw events.
+- Red team console: <http://localhost:5173>
+- SOC dashboard: <http://localhost:5174>
+- Logs: `logs/<service>.log`
 
-Watch the processor's outputs:
+Without an LLM key, incident summaries come from a deterministic template, so the demo
+never depends on an external API.
 
-```bash
-./infra/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic security.alerts
-```
+### Demo script (about 5 minutes)
 
-Interactive API docs: <http://127.0.0.1:8000/docs>
-
-To stop: Ctrl-C the API and processor, then `./infra/stop-kafka.sh`.
-
-> Existing clone? Re-run `./infra/create-topics.sh` once to create the three new output
-> topics. Topic auto-creation is off, so the processor fails without them.
+1. Put both screens side by side. Background traffic is on: the dashboard shows throughput and **no alerts**, because normal behaviour doesn't fire anything.
+2. **Brute Force.** An alert appears within about 100 ms of the first event over the threshold, tagged T1110.001. It escalates to critical at 3× the threshold.
+3. **Port Scan**, then **Host Sweep.** The sensor sees connections the web app never would. One is vertical (many ports on one host), the other horizontal (one port on many hosts).
+4. **Multi-Stage Intrusion.** Five alerts from one IP become **one critical incident**: Discovery → Initial Access → Reconnaissance → Credential Access. The summary notes the successful login and recommends actions.
+5. Turn on **Unreliable network.** The *duplicates dropped* and *late dropped* tiles start counting, and alert counts stay correct: that's dedup and the watermark at work.
+6. **Scoreboard:** recall, precision and time-to-detect for every campaign, graded against the simulator's ground truth.
 
 ---
 
-## Testing what we built
+## Detection (stream processor)
 
-### Automated
+Follows Lab 3 section 3: parse and validate → event-time windows → watermark → dedup → rules.
 
-With the broker and API running:
+- **Windows.** Sliding, 60 s long, sliding every 10 s. Stored as 10 s *panes*: each event lands in one pane, and a window is 6 consecutive panes, so no event is copied six times.
+- **Watermark.** Newest `event_time` minus 10 s. A window closes when the watermark passes its end. Events for already-closed windows are dropped and counted as *late*. If input goes idle, the watermark follows the wall clock. Events more than 60 s in the future go to the DLQ, because a broken clock would otherwise make every honest event late.
+- **Dedup.** `event_id`s are kept only for open windows, so memory stays bounded by the window length.
+- **Early alerts.** Every rule measures something that only grows, so an alert fires the moment a threshold is crossed (`early`). It is re-sent as `escalated` at 3× the threshold and as `final` when the window closes, always under the same deterministic `alert_id`, so downstream writes are upserts. Overlapping windows are suppressed, so one attack gives one alert.
+- **Delivery.** At-least-once. Offsets are committed only up to the oldest event in an open window, and only after Kafka has acknowledged all outputs. After a crash, the processor rebuilds open windows without re-emitting closed ones.
+- **Single instance.** The global watermark and the per-user rule need every partition.
 
-```bash
-python -m tests.smoke_test
-```
+| Rule | Fires when, within one 60 s window | Key | ATT&CK | Severity |
+|---|---|---|---|---|
+| `brute_force` | ≥ 5 failed logins | src_ip + user | T1110.001 · Credential Access | high |
+| `password_spray` | failures on ≥ 5 distinct accounts | src_ip | T1110.003 · Credential Access | high |
+| `brute_force_success` | ≥ 5 failures, then a success | src_ip + user | T1078 · Initial Access | critical |
+| `distributed_brute_force` | one account failing from ≥ 5 IPs | user | T1110 · Credential Access | high |
+| `port_scan` | ≥ 10 distinct ports on one host | src_ip + dest_ip | T1046 · Discovery | medium |
+| `host_sweep` | ≥ 10 distinct hosts | src_ip | T1046 · Discovery | medium |
+| `connection_flood` | ≥ 30 connections to one service | src_ip + dest | T1499 · Impact | medium |
+| `injection_probe` | any request matching an injection signature (SQLi, command, traversal, NoSQL, template, XSS, LDAP, CRLF) | src_ip | T1190 · Initial Access | medium |
+| `api_flood` | ≥ 50 API requests | src_ip | T1499 · Impact | medium |
+| `api_access_probing` | ≥ 10 denied or failed API calls | src_ip | T1595 · Reconnaissance | medium |
 
-It checks health, posts 9 valid events, posts 4 deliberately broken ones, and confirms
-a consumer receives exactly the 9 with each source IP on a single partition. Exits
-non-zero if anything fails.
+Thresholds can be overridden with `RULE_<NAME>_THRESHOLD`. `injection_probe` matches the decoded
+request line, which the web server logs in `raw_payload`. The contract stays at v1.
 
-Processor unit tests (no Kafka needed):
+**Metrics** (every 5 s, to `security.pipeline.metrics`): events/s, consumer lag, watermark
+delay, detection latency p50/p95/p99 over the last 500 alerts, per-stage latency (ingest =
+event→ingest, processing = ingest→processor), and counters (accepted, duplicate, late,
+invalid, alerts by rule). Tail percentiles, not averages, are what matter for alerting.
 
-```bash
-python -m pytest tests/test_processor.py -v
-```
+## Storage
 
-Processor end to end (broker + API running; it starts its own processor with short
-windows and a throwaway group, ~45s):
+- **Lake.** Micro-batches (5,000 events or 30 s) of Snappy Parquet in `data_lake/year=/month=/day=/hour=/`, partitioned by `event_time`, so a late event still lands in its true hour. Each row keeps its Kafka partition and offset for provenance. Files are written to a temporary name and renamed into place, so readers never see a half-written file. Offsets are committed after the write, so a crash can store a duplicate and readers dedup on `event_id`. Query it with DuckDB or pandas (`pyarrow.dataset`, hive partitioning).
+- **Warehouse** (`warehouse/schema.sql`):
+  - `alerts`: upsert on `alert_id`
+  - `incidents`
+  - `aggregates`: per tumbling window and source type
+  - `pipeline_metrics`
+  - `campaigns`: ground truth, read only by the scoreboard
+- **Incidents.** Alerts from the same attacker are chained while they arrive less than 10 minutes apart (a session window). Two or more ATT&CK tactics make it **multi-stage** and raise it one severity level.
+- **Summaries.** The summariser runs inside the dashboard service, off the detection path. It writes one summary per incident, only after the incident has been quiet for 8 s, and again only when the incident's content changes. It uses any OpenAI-compatible endpoint (Groq, Gemini), sends only alert metadata, and falls back to a template whenever the LLM is unavailable.
 
-```bash
-python -m tests.e2e_processor
-```
+## Detection scoreboard
 
-It checks that each attack raises exactly its rules and normal traffic raises none,
-duplicates are not double counted, late events are dropped, records the processor
-rejects reach the DLQ, aggregates and metrics are published, and a restart does not
-re-emit alerts.
+The simulator knows what it launched, so the platform grades itself:
+- **Recall:** expected rules detected for each campaign.
+- **Precision:** alerts attributable to a campaign. Anything else came from benign traffic and counts as a false positive.
+- **Time-to-detect:** first matching alert minus campaign start.
 
-### By hand
-
-**A valid event — expect `202`:**
-
-```bash
-curl -X POST http://127.0.0.1:8000/events \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "event_id": "11111111-1111-1111-1111-111111111111",
-    "event_time": "2026-09-11T22:30:00Z",
-    "source_type": "auth",
-    "src_ip": "10.0.0.5",
-    "dest_ip_port": "10.0.0.1:22",
-    "user": "admin",
-    "status": "fail"
-  }'
-```
-
-It should appear in the Terminal 3 consumer within a second.
-
-**An invalid event — expect `422` and a DLQ entry:**
-
-```bash
-# source_type "database" is not in the allowed enum
-curl -X POST http://127.0.0.1:8000/events \
-  -H 'Content-Type: application/json' \
-  -d '{"event_id":"22222222-2222-2222-2222-222222222222",
-       "event_time":"2026-09-11T22:30:00Z","source_type":"database",
-       "src_ip":"10.0.0.5","status":"fail"}'
-
-# then inspect what got parked:
-./infra/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 \
-  --topic security.events.dlq --from-beginning --timeout-ms 5000
-```
-
-**Useful Kafka commands:**
-
-```bash
-cd infra/kafka
-
-# topics and their partition layout
-bin/kafka-topics.sh --bootstrap-server localhost:9092 --describe
-
-# consumer lag — CURRENT-OFFSET vs LOG-END-OFFSET
-bin/kafka-consumer-groups.sh --bootstrap-server localhost:9092 \
-  --describe --group test-consumer-v1
-```
+The ground truth travels on its own topic that the processor never reads, so detection cannot "see the answers".
 
 ---
+
+## Testing
+
+```bash
+python -m pytest tests/test_processor.py -v   # 46 unit tests, no Kafka needed
+python -m tests.smoke_test                    # ingest: validation, DLQ, keying (broker + API up)
+python -m tests.e2e_processor                 # processor: rules, dedup, late, DLQ, restart (broker + API up)
+python -m tests.e2e_platform                  # whole platform, run like the demo (scripts/start.sh up)
+```
+
+Last full run: every one of the 9 scenarios raised exactly its expected rules, with no alert
+on employee traffic. Detection latency was p50 41 ms and max 116 ms. Scoreboard recall and
+precision were both 100%, with a median time-to-detect of about 0.6 s from campaign launch
+(that includes the attack itself reaching the threshold).
+
+## Design decisions
+
+- **Defended systems write the log, not the attacker.** That's how a real SIEM is fed, and the attacker can't misreport its IP or outcomes. Source IPs come from the kernel (bound loopback addresses), not from spoofable headers.
+- **Contract v1 is frozen.** `ingest_time` is stamped by the server. `event_time` must carry a UTC offset. Unknown fields are rejected at the door, and invalid payloads go to the DLQ rather than being dropped.
+- **`acks=all` plus idempotent producers** everywhere, and dedup on `event_id` in the processor, because at-least-once delivery means duplicates.
+- **One consumer group per downstream concern** (lake, warehouse, dashboard), so storage I/O never sits on the detection path.
+- **Live data pushed, history pulled.** The dashboard gets alerts and metrics over a WebSocket fed from Kafka. Only history queries hit Postgres, which addresses the FR5 polling risk from Lab 2.
+
+**Limitations and future work:**
+- A single processor instance. A keyed shuffle would allow scaling out.
+- Static thresholds. Adaptive per-entity baselines could be graded with the same scoreboard.
+- The sensor terminates connections itself. It is not a passive packet tap.
+- MinIO / object storage for the lake is not implemented.
+
+`docs/integration-review.md` has the review that guided the integration.
 
 ## Things that will trip you up
 
-**`auto.offset.reset` is per partition, not per topic.** It only applies to a partition
-the consumer group has *no committed offset for*. If a partition received nothing
-during an earlier run, no offset was committed for it, so on restart the consumer
-jumps to the end and silently skips messages already sitting there. Use
-`python -m consumer.test_consumer --earliest` to replay from the beginning.
-
-**`confluent_kafka.Consumer` is not thread-safe.** Polling it from a worker thread
-while it was created elsewhere yields no messages and no error. Keep one consumer on
-one thread.
-
-**Don't re-run `kafka-storage.sh format`.** It is a one-time step and rerunning wipes
-the cluster. `setup-kafka.sh` refuses to do it twice, but the raw command will not.
-
-**Topic-name warning on create** (`topics with a period or underscore could collide`)
-is expected and harmless — our names use dots only, never both.
-
-**There is no ZooKeeper.** Kafka 4.x uses KRaft, where the broker stores its own
-cluster metadata. Most tutorials online still show `zookeeper-server-start.sh`; those
-are pre-4.0 and their commands will not match this setup.
-
----
-
-## Design notes
-
-- **`acks=all` + `enable.idempotence=true`** on the producer: the broker confirms every
-  write and dedups producer retries, so a retry after a timeout does not become a
-  second copy. Consumers can still see duplicates — that is what at-least-once means —
-  which is why the stream processor will dedup on `event_id`.
-- **`ingest_time` is stamped server-side** and any client value is overwritten. Producer
-  clocks are not trustworthy.
-- **`event_time` must carry an explicit UTC offset.** Naive timestamps are rejected at
-  the door, because ambiguous timestamps make event-time windows silently wrong.
-- **Unknown fields are rejected**, not ignored. A schema drift in the simulator should
-  surface here at ingest, not three layers down as a broken warehouse insert.
-- **Invalid payloads go to the DLQ** rather than being dropped, so bad input is evidence
-  rather than a mystery.
-- **`schema_version`** is on every event. Bump it if the contract changes.
-
-## Stream processor (FR2)
-
-Follows Lab 3 section 3, in order: parse + validate -> assign to event-time windows ->
-watermark -> dedup on `event_id` -> deterministic rules.
-
-**Windows.** Sliding, 60 s long, sliding every 10 s (`--window`, `--slide`). Stored as
-10 s *panes*: each event goes into exactly one pane, and a window is its 6 consecutive
-panes. This avoids copying every event into 6 windows.
-
-**Watermark and late data.** Watermark = newest `event_time` seen minus 10 s
-(`--lateness`). A window is complete once the watermark passes its end. An event whose
-windows have all been emitted is dropped and counted as `late`. If the topic is idle
-for 5 s (`--idle-advance`), the watermark follows the wall clock so the last windows
-still close. Events more than 60 s in the future (`MAX_FUTURE_S`) go to the DLQ: a
-broken clock would otherwise push the watermark forward and make honest events late.
-
-**Dedup.** A set of `event_id`s for the open windows only. Once every window an id
-could belong to has closed, a duplicate of it would be late anyway, so the id is
-forgotten. Memory stays bounded by the window length.
-
-**Cleaning.** IPs are canonicalised (`ipaddress`), usernames are trimmed and
-lowercased, `dest_ip_port` is split into `dest_ip` + `dest_port` (IPv6 `[::1]:443`
-supported). Unparseable records go to the DLQ with `stage: stream-processor`.
-
-**Rules** (`processor/rules.py`; thresholds can be overridden with `RULE_<NAME>_THRESHOLD`):
-
-| Rule | Looks at | Key | Fires when (per window) | Severity |
-|---|---|---|---|---|
-| `brute_force` | auth, not success | src_ip + user | >= 5 failures | high |
-| `password_spray` | auth, not success | src_ip | >= 5 distinct users | high |
-| `brute_force_success` | auth | src_ip + user | >= 5 failures then a success | critical |
-| `distributed_brute_force` | auth, not success | user | >= 5 distinct source IPs | high |
-| `port_scan` | network | src_ip + dest_ip | >= 10 distinct ports | medium |
-| `host_sweep` | network | src_ip | >= 10 distinct dest hosts | medium |
-| `api_flood` | api | src_ip | >= 50 requests | medium |
-| `api_access_probing` | api, not success | src_ip | >= 10 denied/failed | medium |
-
-At 3x the threshold an alert goes up one severity level.
-
-**Alert timing.** Every rule measures something that only grows (a count, a number of
-distinct values), so an alert is raised the moment the threshold is crossed (`trigger:
-early`, typically under 0.5 s after ingest), not when the window closes. When the
-window closes, the alert is re-sent with its final count (`trigger: final`) under the
-same `alert_id`. While one window has alerted for a (rule, key), overlapping windows
-for the same pair are suppressed, so one attack gives one alert rather than six.
-
-**Provenance.** Each alert carries `sample_event_ids` (up to 10 of the raw events
-behind it), the window bounds, the first and last `event_time`, `detected_at`,
-`detection_latency_ms`, and the processor's group and window settings.
-
-**Delivery and restart.** At-least-once. Offsets are committed by hand: only up to the
-oldest event still in an open window, and only after Kafka has acknowledged every
-output. The commit metadata records which windows were already emitted. After a crash
-the processor rebuilds the open windows from Kafka without re-emitting closed ones.
-`alert_id` is a deterministic UUID of (rule, entity, window), so replays upsert.
-
-**Single instance.** Run one processor. The watermark and `distributed_brute_force`
-(keyed by user, not by the `src_ip` partition key) need to see every partition.
-
-### Open question
-
-Lab 3 names the field `dest_ip:port`. A colon is awkward as a JSON key, so it is
-`dest_ip_port` here, holding the same `"ip:port"` string. The processor now splits it
-itself, so the contract can stay as is. Changing it is optional.
+- **`auto.offset.reset` is per partition.** It only applies where a group has no committed offset.
+- **`confluent_kafka.Consumer` is not thread-safe.** Keep each consumer on one thread. The dashboard runs its consumer in a dedicated thread.
+- **Never re-run `kafka-storage.sh format`.** It wipes the cluster. `setup-kafka.sh` refuses to.
+- **Topic auto-creation is off.** `scripts/start.sh` runs `infra/create-topics.sh`, which is idempotent.
+- **The topic-name warning** about periods and underscores is harmless.
+- **`127.x` source binding is Linux-specific.** On macOS each loopback alias would need `ifconfig lo0 alias`.

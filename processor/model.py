@@ -8,6 +8,7 @@ API version. The same Pydantic contract is reused so the two can never disagree.
 import ipaddress
 from dataclasses import dataclass
 from typing import Optional
+from urllib.parse import unquote_plus
 
 from pydantic import ValidationError
 
@@ -29,6 +30,7 @@ class Event:
     dest_ip: Optional[str] = None
     dest_port: Optional[int] = None
     user: Optional[str] = None
+    request: Optional[str] = None  # decoded "path?query" of an HTTP request (api/auth events)
 
 
 def _canonical_ip(value: str, field: str) -> str:
@@ -82,6 +84,14 @@ def parse_event(raw: bytes, now: float, max_future_s: float) -> Event:
     dest_ip, dest_port = split_dest(ev.dest_ip_port)
     user = ev.user.strip().lower() if ev.user and ev.user.strip() else None
 
+    # raw_payload is free-form, but the web server logs its request line there. Decode it
+    # once here so rules match what the server actually received, not its URL encoding.
+    raw = ev.raw_payload or {}
+    request = None
+    if isinstance(raw.get("path"), str):
+        query = raw.get("query") if isinstance(raw.get("query"), str) else ""
+        request = unquote_plus(raw["path"] + ("?" + query if query else ""))
+
     return Event(
         event_id=str(ev.event_id),
         ts=ts,
@@ -92,4 +102,5 @@ def parse_event(raw: bytes, now: float, max_future_s: float) -> Event:
         dest_ip=dest_ip,
         dest_port=dest_port,
         user=user,
+        request=request,
     )
