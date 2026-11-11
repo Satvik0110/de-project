@@ -6,3 +6,7 @@ __pycache__/
 infra/kafka/
 infra/kafka-data/
 *.log
+*.pdf
+*.txt
+Lab678_Group4.md
+*.pptx

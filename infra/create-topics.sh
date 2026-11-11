@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create the two project topics. Idempotent: skips topics that already exist.
+# Create the project topics. Idempotent: skips topics that already exist.
 set -euo pipefail
 INFRA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KT="$INFRA_DIR/kafka/bin/kafka-topics.sh"
@@ -28,6 +28,10 @@ create() {  # name partitions
 create security.events.raw 3
 # dlq: low volume, ordering across it does not matter
 create security.events.dlq 1
+# stream processor outputs: low volume, one partition keeps them in emission order
+create security.alerts 1
+create security.aggregates 1
+create security.pipeline.metrics 1
 
 echo
 "$KT" --bootstrap-server "$BOOTSTRAP" --list
