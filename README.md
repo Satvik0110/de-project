@@ -47,9 +47,10 @@ health, and a scoreboard that grades detection against the simulator's ground tr
 | `shipper/` | Log shipper shared by target and sensor (the role Filebeat/Fluent Bit play in production): bounded queue, retry with backoff on ingest backpressure. In chaos mode it duplicates and delays events on purpose. |
 | `ingest/` | Ingest API: validates against the frozen contract (`contracts/event.schema.json`), stamps `ingest_time`, produces to Kafka keyed by `src_ip`, sends invalid payloads to the DLQ. |
 | `processor/` | Stream processor: event-time sliding windows, watermark, dedup, 10 detection rules tagged with MITRE ATT&CK, early alerting, at-least-once with restart recovery. |
-| `lake/` | Lake writer: raw events → Snappy Parquet, Hive partitions `year=/month=/day=/hour=`. |
-| `warehouse/` | Schema, plus a writer that upserts alerts, aggregates, metrics and campaigns into PostgreSQL and chains alerts into incidents. |
-| `dashboard/` | Dashboard API (live WebSocket, SQL history, scoreboard, LLM summariser) and the SOC dashboard UI (`dashboard/ui`). |
+| `lake/` | Lake writer: raw events → Snappy Parquet, Hive partitions `year=/month=/day=/hour=`. `reader.py` reads it back deduplicated; `compact.py` merges each finished hour into one file. |
+| `warehouse/` | Schema and analytical views, plus a writer that upserts alerts, aggregates, metrics and campaigns into PostgreSQL and chains alerts into incidents. |
+| `dashboard/` | Dashboard API (live WebSocket, SQL history, scoreboard, raw-event provenance from the lake, LLM summariser) and the SOC dashboard UI (`dashboard/ui`). |
+| `docker-compose.yml` | Kafka (KRaft) + PostgreSQL in Docker, for machines without the native Linux setup. |
 | `tests/` | Unit tests and three end-to-end suites (see [Testing](#testing)). |
 | `tools/mock_traffic.py` | Synthetic events posted straight to ingest. Used by the processor end-to-end test. |
 
@@ -82,6 +83,27 @@ npm install --prefix frontend
 npm install --prefix dashboard/ui
 cp .env.example .env            # optional: LLM key for AI incident summaries
 ```
+
+### Alternative: Kafka and PostgreSQL in Docker (Windows, macOS, or no sudo)
+
+`docker-compose.yml` runs the same broker (KRaft, same six topics) and the same warehouse
+(role/db/password `secops`, `warehouse/schema.sql` applied), so every service runs unchanged.
+
+```bash
+docker compose up -d                  # Kafka on :9092, PostgreSQL on :5432
+PG_PORT=5433 docker compose up -d     # if a native PostgreSQL already uses 5432; then set
+                                      # WAREHOUSE_DSN=postgresql://secops:secops@localhost:5433/secops
+```
+
+On Windows, start each service with the commands from `scripts/start.sh`, plus one flag for
+the dashboard: async psycopg needs the selector event loop.
+
+```bash
+uvicorn dashboard.api:app --port 8003 --loop asyncio:SelectorEventLoop
+```
+
+The simulator, target and sensor bind `127.x` source addresses, which is Linux-specific (see
+the end of this file). `tools/mock_traffic.py` exercises everything else on any OS.
 
 ## Running
 
@@ -143,13 +165,19 @@ invalid, alerts by rule). Tail percentiles, not averages, are what matter for al
 
 ## Storage
 
-- **Lake.** Micro-batches (5,000 events or 30 s) of Snappy Parquet in `data_lake/year=/month=/day=/hour=/`, partitioned by `event_time`, so a late event still lands in its true hour. Each row keeps its Kafka partition and offset for provenance. Files are written to a temporary name and renamed into place, so readers never see a half-written file. Offsets are committed after the write, so a crash can store a duplicate and readers dedup on `event_id`. Query it with DuckDB or pandas (`pyarrow.dataset`, hive partitioning).
-- **Warehouse** (`warehouse/schema.sql`):
+- **Lake.** Micro-batches (5,000 events or 30 s) of Snappy Parquet in `data_lake/year=/month=/day=/hour=/`, partitioned by `event_time`, so a late event still lands in its true hour. Each row keeps its Kafka partition and offset for provenance. Files are written to a temporary name and renamed into place, so readers never see a half-written file. Offsets are committed after the write, so a crash can store a duplicate and readers dedup on `event_id`.
+  - **Reading.** `lake/reader.py` opens only the hour folders a time range touches and drops duplicate `event_id`s, so callers never see a replayed event: `python -m lake.reader --minutes 60 --src-ip 127.66.0.5`. DuckDB or pandas also work directly (`pyarrow.dataset`, hive partitioning).
+  - **Compaction.** A 30 s flush leaves ~120 small files per busy hour, and every file costs an open and a footer read on each scan. `python -m lake.compact` merges each hour that ended over 15 min ago into one file sorted by `event_time`, with duplicates removed. It is safe while the writer runs: it deletes only the files it read, so a late event written meanwhile is picked up next time.
+  - **Quarantine.** A record that cannot be parsed is kept, byte for byte, in `data_lake/_quarantine/<date>.jsonl` with its Kafka coordinates and the error. Nothing in the raw topic is silently lost.
+- **Warehouse** (`warehouse/schema.sql`, applied by the writer at every start, idempotent):
   - `alerts`: upsert on `alert_id`
   - `incidents`
   - `aggregates`: per tumbling window and source type
   - `pipeline_metrics`
   - `campaigns`: ground truth, read only by the scoreboard
+  - `warehouse_rejects`: messages that could not be stored (bad JSON, missing field, a value Postgres rejects), with Kafka coordinates. Each message is written in its own savepoint, so one bad message no longer crashes the writer on every restart, and the rest of its batch still commits.
+  - Views (always current, nothing extra to maintain): `hourly_ip_stats` (per attacker IP per hour), `attack_type_breakdown` (per rule: volume, attackers, p50/p95 latency), `threat_actors` (per attacker across incidents: worst severity, multi-stage, compromised account).
+- **Dashboard API, storage endpoints.** `/api/threat-actors`, `/api/attack-types` and `/api/ip-stats` serve the views. `/api/alerts/{id}/events` returns an alert's raw events from the lake, which makes the provenance from Lab 6–8 a single click. `/api/health` reports warehouse and lake status. SQL runs on a connection pool (`psycopg_pool`) instead of opening a connection per query.
 - **Incidents.** Alerts from the same attacker are chained while they arrive less than 10 minutes apart (a session window). Two or more ATT&CK tactics make it **multi-stage** and raise it one severity level.
 - **Summaries.** The summariser runs inside the dashboard service, off the detection path. It writes one summary per incident, only after the incident has been quiet for 8 s, and again only when the incident's content changes. It uses any OpenAI-compatible endpoint (Groq, Gemini), sends only alert metadata, and falls back to a template whenever the LLM is unavailable.
 
@@ -168,6 +196,10 @@ The ground truth travels on its own topic that the processor never reads, so det
 
 ```bash
 python -m pytest tests/test_processor.py -v   # 46 unit tests, no Kafka needed
+python -m pytest tests/test_lake.py -v        # lake writer, reader, compaction; no Kafka needed
+python -m pytest tests/test_warehouse.py tests/test_dashboard.py -v
+                                              # writer, incidents, rejects, views, API endpoints;
+                                              # PostgreSQL needed (own throwaway schema), no Kafka
 python -m tests.smoke_test                    # ingest: validation, DLQ, keying (broker + API up)
 python -m tests.e2e_processor                 # processor: rules, dedup, late, DLQ, restart (broker + API up)
 python -m tests.e2e_platform                  # whole platform, run like the demo (scripts/start.sh up)
@@ -191,6 +223,8 @@ precision were both 100%, with a median time-to-detect of about 0.6 s from campa
 - Static thresholds. Adaptive per-entity baselines could be graded with the same scoreboard.
 - The sensor terminates connections itself. It is not a passive packet tap.
 - MinIO / object storage for the lake is not implemented.
+- `pipeline_metrics` grows by one row every 5 s (about 17k a day) and has no retention job yet.
+- Lake compaction runs on demand (`python -m lake.compact`), not on a schedule.
 
 `docs/integration-review.md` has the review that guided the integration.
 

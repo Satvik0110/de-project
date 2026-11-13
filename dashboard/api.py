@@ -4,6 +4,11 @@ Two access paths, matching what each view needs (and Lab 2's FR5 risk, "frequent
 polling slowing backend analytical queries"):
   live     alerts + pipeline metrics are PUSHED over a WebSocket straight from Kafka
   history  incidents, scoreboard, charts and storage stats are SQL over the warehouse
+  raw      the events behind an alert are read back from the Parquet lake (provenance)
+
+SQL runs on a small connection pool, opened once at startup: the UI polls several
+endpoints every few seconds, and a fresh Postgres connection per query would cost more
+than the query itself.
 
 Run:  uvicorn dashboard.api:app --port 8003
 """
@@ -15,17 +20,18 @@ import statistics
 import threading
 import uuid
 from contextlib import asynccontextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-import psycopg
 import pyarrow.parquet as pq
 from confluent_kafka import Consumer
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 
 from ingest.config import KAFKA_BOOTSTRAP
+from lake import reader as lake_reader
 from lake.writer import LAKE_DIR
 from processor.config import GROUP_ID, TOPIC_ALERTS, TOPIC_METRICS
 
@@ -33,6 +39,7 @@ from . import summariser
 
 DSN = os.getenv("WAREHOUSE_DSN", "postgresql://secops:secops@localhost:5432/secops")
 GRACE = timedelta(seconds=120)   # an alert counts for a campaign if raised up to this long after it ended
+pool: AsyncConnectionPool = None  # opened in lifespan()
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 sockets: set[WebSocket] = set()
@@ -69,12 +76,18 @@ async def broadcast(msg: dict) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global pool
+    # open() does not wait for a connection: the API starts even if Postgres is still
+    # coming up, and queries wait until the pool has one.
+    pool = AsyncConnectionPool(DSN, min_size=1, max_size=5, open=False, kwargs={"row_factory": dict_row})
+    await pool.open()
     stop = threading.Event()
     threading.Thread(target=kafka_bridge, args=(asyncio.get_running_loop(), stop), daemon=True).start()
     task = asyncio.create_task(summariser.run())
     yield
     stop.set()
     task.cancel()
+    await pool.close()
 
 
 app = FastAPI(title="SOC dashboard API", lifespan=lifespan)
@@ -95,7 +108,7 @@ async def live(ws: WebSocket):
 # ------------------------------------------------------------------ queries
 
 async def query(sql: str, params=()) -> list[dict]:
-    async with await psycopg.AsyncConnection.connect(DSN, row_factory=dict_row) as conn:
+    async with pool.connection() as conn:
         return await (await conn.execute(sql, params)).fetchall()
 
 
@@ -120,6 +133,8 @@ def lake_stats() -> dict:
     for f in files:
         if str(f) not in _lake_rows:
             _lake_rows[str(f)] = pq.read_metadata(f).num_rows
+    for gone in _lake_rows.keys() - {str(f) for f in files}:   # removed by lake.compact
+        del _lake_rows[gone]
     return {"files": len(files), "bytes": sum(f.stat().st_size for f in files),
             "rows": sum(_lake_rows[str(f)] for f in files)}
 
@@ -140,21 +155,74 @@ async def summary():
             "lake": await asyncio.to_thread(lake_stats), "warehouse": counts}
 
 
+@app.get("/api/health")
+async def health():
+    """Is the warehouse reachable, and how far behind is the newest metrics snapshot?"""
+    try:
+        row = (await query("SELECT now() - max(at) AS age FROM pipeline_metrics"))[0]
+    except Exception as exc:
+        return {"warehouse": "down", "error": str(exc)}
+    age = row["age"].total_seconds() if row["age"] is not None else None
+    return {"warehouse": "up", "metrics_age_s": age, "lake_dir": str(LAKE_DIR),
+            "lake_exists": Path(LAKE_DIR).exists()}
+
+
 @app.get("/api/metrics")
-async def metrics(minutes: int = 15):
+async def metrics(minutes: int = Query(15, ge=1, le=24 * 60)):
     rows = await query("SELECT raw FROM pipeline_metrics WHERE at > now() - make_interval(mins => %s) "
                        "ORDER BY at", (minutes,))
     return [r["raw"] for r in rows]
 
 
 @app.get("/api/alerts")
-async def alerts(limit: int = 100):
+async def alerts(limit: int = Query(100, ge=1, le=1000)):
     rows = await query("SELECT raw, incident_id FROM alerts ORDER BY first_detected_at DESC LIMIT %s", (limit,))
     return [alert_view(r) for r in rows]
 
 
+@app.get("/api/alerts/{alert_id}/events")
+async def alert_events(alert_id: uuid.UUID):
+    """Provenance: the raw events behind an alert, read back from the Parquet lake.
+
+    Uses the alert's sample_event_ids and its first/last event time, so only the hour
+    folders that alert spans are opened. Events still in the lake writer's buffer (up to
+    30 s) are not on disk yet; `missing` lists those ids.
+    """
+    rows = await query("SELECT sample_event_ids, first_event_time, last_event_time FROM alerts "
+                       "WHERE alert_id = %s", (alert_id,))
+    if not rows:
+        raise HTTPException(404, "no such alert")
+    a = rows[0]
+    ids = [str(i) for i in a["sample_event_ids"]]
+    table = await asyncio.to_thread(lake_reader.events_by_id, ids, a["first_event_time"], a["last_event_time"],
+                                    LAKE_DIR)
+    events = table.to_pylist()
+    found = {e["event_id"] for e in events}
+    return {"alert_id": str(alert_id), "events": events, "missing": [i for i in ids if i not in found]}
+
+
+@app.get("/api/threat-actors")
+async def threat_actors(minutes: int = Query(60, ge=1, le=7 * 24 * 60), limit: int = Query(50, ge=1, le=500)):
+    """Attackers seen in the last `minutes`, worst first (warehouse view threat_actors)."""
+    return await query("SELECT * FROM threat_actors WHERE last_seen > now() - make_interval(mins => %s) "
+                       "ORDER BY severity_rank(severity) DESC, last_seen DESC LIMIT %s", (minutes, limit))
+
+
+@app.get("/api/attack-types")
+async def attack_types():
+    """Per detection rule: volume, distinct attackers, latency (warehouse view attack_type_breakdown)."""
+    return await query("SELECT * FROM attack_type_breakdown ORDER BY alerts DESC")
+
+
+@app.get("/api/ip-stats")
+async def ip_stats(hours: int = Query(24, ge=1, le=24 * 30), limit: int = Query(100, ge=1, le=1000)):
+    """Per attacker IP per hour (warehouse view hourly_ip_stats)."""
+    return await query("SELECT * FROM hourly_ip_stats WHERE hour > now() - make_interval(hours => %s) "
+                       "ORDER BY hour DESC, alerts DESC LIMIT %s", (hours, limit))
+
+
 @app.get("/api/incidents")
-async def incidents(limit: int = 50):
+async def incidents(limit: int = Query(50, ge=1, le=500)):
     return [incident_view(r) for r in await query("SELECT * FROM incidents ORDER BY last_seen DESC LIMIT %s", (limit,))]
 
 
@@ -169,7 +237,7 @@ async def incident(incident_id: uuid.UUID):
 
 
 @app.get("/api/aggregates")
-async def aggregates(minutes: int = 30):
+async def aggregates(minutes: int = Query(30, ge=1, le=24 * 60)):
     return await query("SELECT * FROM aggregates WHERE window_start > now() - make_interval(mins => %s) "
                        "ORDER BY window_start, source_type", (minutes,))
 
@@ -192,9 +260,10 @@ async def scoreboard():
                           (since, since))
     attributed: set = set()
     out = []
+    now = datetime.now(timezone.utc)
     for c in camps:
         ips = set(c["ips"])
-        end = c["ended_at"] or (await query("SELECT now() n"))[0]["n"]
+        end = c["ended_at"] or now            # still running
         hits = [a for a in alerts_
                 if (a["src_ip"] in ips or (a["src_ip"] is None and a["username"] == c["target_user"]))
                 and c["started_at"] <= a["first_detected_at"] <= end + GRACE]
