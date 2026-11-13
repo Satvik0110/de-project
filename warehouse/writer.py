@@ -9,6 +9,15 @@ A separate consumer of the processor's output topics, so the processor keeps one
 Delivery: at-least-once. Kafka offsets are committed only after the DB transaction
 commits, and every write is an idempotent upsert, so a replay changes nothing.
 
+Bad messages: each message is written inside its own savepoint. One that cannot be
+stored (bad JSON, missing field, a value Postgres rejects) is rolled back alone and
+recorded in warehouse_rejects with its Kafka coordinates; the rest of the batch commits.
+Without this, one poison message would crash the writer again on every restart.
+Connection or schema errors are not "bad messages": they still stop the writer.
+
+Schema: warehouse/schema.sql is idempotent and applied at startup, so new tables and
+views reach an existing database without a manual migration step.
+
 Incidents: alerts from the same attacker are chained while they keep arriving less than
 INCIDENT_GAP apart (a session window). An incident spanning two or more ATT&CK tactics
 is a multi-stage intrusion and is raised one severity level.
@@ -20,6 +29,7 @@ import logging
 import os
 import signal
 import uuid
+from pathlib import Path
 
 import psycopg
 from confluent_kafka import Consumer, KafkaException
@@ -31,6 +41,10 @@ from processor.rules import SEVERITIES
 DSN = os.getenv("WAREHOUSE_DSN", "postgresql://secops:secops@localhost:5432/secops")
 TOPIC_CAMPAIGNS = "security.sim.campaigns"
 INCIDENT_GAP = "10 minutes"
+SCHEMA_SQL = Path(__file__).with_name("schema.sql")
+
+# A message that raises one of these is bad data, not a broken pipeline: reject it, move on.
+BAD_MESSAGE = (ValueError, KeyError, TypeError, psycopg.DataError, psycopg.IntegrityError)
 
 log = logging.getLogger("warehouse")
 running = True
@@ -140,6 +154,50 @@ def ours(v: dict) -> bool:
 HANDLERS = {TOPIC_ALERTS: upsert_alert, TOPIC_AGGREGATES: upsert_aggregate,
             TOPIC_METRICS: insert_metrics, TOPIC_CAMPAIGNS: upsert_campaign}
 
+# The fields each handler's SQL reads (a value may be null, the key must be there).
+# Checked up front, so a message missing one is rejected as bad data instead of
+# failing inside psycopg as a ProgrammingError, which also covers real bugs.
+REQUIRED = {
+    TOPIC_ALERTS: ("alert_id", "rule_name", "severity", "entity", "src_ip", "user", "dest_ip",
+                   "window_start", "window_end", "count", "threshold", "trigger", "first_event_time",
+                   "event_time", "detected_at", "detection_latency_ms", "sample_event_ids"),
+    TOPIC_AGGREGATES: ("window_start", "window_end", "source_type", "event_count", "unique_ips",
+                       "unique_users", "success_count", "fail_count", "denied_count"),
+    TOPIC_METRICS: ("at", "events_per_s", "consumer_lag"),
+    TOPIC_CAMPAIGNS: ("campaign_id", "scenario", "attacker_ips", "target_user", "expected_rules",
+                      "started_at", "ended_at", "requests"),
+}
+
+
+def apply_schema(conn) -> None:
+    conn.execute(SCHEMA_SQL.read_text(encoding="utf-8"))
+
+
+def check_fields(topic: str, v) -> None:
+    if not isinstance(v, dict):
+        raise TypeError(f"expected a JSON object, got {type(v).__name__}")
+    missing = [f for f in REQUIRED[topic] if f not in v]
+    if missing:
+        raise KeyError(f"missing field(s): {', '.join(missing)}")
+
+
+def store(conn, cur, topic: str, partition: int, offset: int, value: bytes) -> bool:
+    """Write one message inside its own savepoint. Returns False if it was rejected."""
+    try:
+        with conn.transaction():
+            v = json.loads(value)
+            if topic == TOPIC_CAMPAIGNS or ours(v):
+                check_fields(topic, v)
+                HANDLERS[topic](cur, v)
+        return True
+    except BAD_MESSAGE as exc:
+        log.warning("rejected %s[%d]@%d: %s", topic, partition, offset, exc)
+        cur.execute("""INSERT INTO warehouse_rejects (topic, partition, "offset", error, payload)
+                       VALUES (%s, %s, %s, %s, %s) ON CONFLICT DO NOTHING""",
+                    (topic, partition, offset, f"{type(exc).__name__}: {exc}",
+                     value.decode("utf-8", errors="replace") if value is not None else None))
+        return False
+
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -151,6 +209,7 @@ def main() -> int:
     consumer.subscribe(list(HANDLERS))
     log.info("warehouse writer -> %s", DSN.rsplit("@", 1)[-1])
     with psycopg.connect(DSN, autocommit=True) as conn:
+        apply_schema(conn)
         try:
             while running:
                 msgs = consumer.consume(500, timeout=1.0)
@@ -160,9 +219,7 @@ def main() -> int:
                     for msg in msgs:
                         if msg.error():
                             raise KafkaException(msg.error())
-                        v = json.loads(msg.value())
-                        if msg.topic() == TOPIC_CAMPAIGNS or ours(v):
-                            HANDLERS[msg.topic()](cur, v)
+                        store(conn, cur, msg.topic(), msg.partition(), msg.offset(), msg.value())
                 consumer.commit(asynchronous=False)
         finally:
             consumer.close()
