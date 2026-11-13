@@ -8,7 +8,11 @@ detection path (Kafka gives each group its own copy of the stream).
     (a late event still lands in its true hour; queries prune whole folders)
   - Snappy-compressed Parquet; per-column min/max statistics let DuckDB/pandas skip row groups
   - offsets committed only after the files are on disk: at-least-once. A crash between
-    write and commit can store an event twice, so readers dedup on event_id.
+    write and commit can store an event twice, so readers dedup on event_id
+    (lake.reader does it for you, lake.compact removes them for good).
+  - a record that cannot be parsed is not dropped: it goes, byte for byte, to
+    data_lake/_quarantine/ as JSON lines with its Kafka coordinates and the error.
+    The leading underscore keeps it out of Parquet readers (pyarrow skips _ and . paths).
 
 Run:  python -m lake.writer
 """
@@ -77,6 +81,23 @@ def flush(rows: list[dict], lake_dir: Path = LAKE_DIR) -> list[Path]:
     return written
 
 
+def quarantine(records: list[dict], lake_dir: Path = LAKE_DIR) -> Path:
+    """Append unparseable records to today's quarantine file. Returns its path."""
+    folder = lake_dir / "_quarantine"
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{datetime.now(timezone.utc):%Y-%m-%d}.jsonl"
+    with path.open("a", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r) + "\n")
+    return path
+
+
+def bad_record(value: bytes, partition: int, offset: int, exc: Exception) -> dict:
+    return {"kafka_partition": partition, "kafka_offset": offset,
+            "error": f"{type(exc).__name__}: {exc}", "quarantined_at": datetime.now(timezone.utc).isoformat(),
+            "value": value.decode("utf-8", errors="replace") if value is not None else None}
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     signal.signal(signal.SIGINT, lambda *_: globals().update(running=False))
@@ -87,15 +108,17 @@ def main() -> int:
     consumer.subscribe([TOPIC_RAW])
     log.info("lake writer -> %s (flush at %d rows / %.0fs)", LAKE_DIR, FLUSH_ROWS, FLUSH_S)
 
-    rows, bad, last_flush = [], 0, time.time()
+    rows, bad, last_flush = [], [], time.time()
 
     def commit_batch():
-        nonlocal rows, last_flush
+        nonlocal rows, bad, last_flush
         if rows:
             paths = flush(rows)
             log.info("flushed %d events into %d file(s)", len(rows), len(paths))
+        if bad:
+            log.warning("quarantined %d unparseable record(s) -> %s", len(bad), quarantine(bad))
         consumer.commit(asynchronous=False)
-        rows, last_flush = [], time.time()
+        rows, bad, last_flush = [], [], time.time()
 
     try:
         while running:
@@ -104,12 +127,14 @@ def main() -> int:
                     raise KafkaException(msg.error())
                 try:
                     rows.append(to_row(msg.value(), msg.partition(), msg.offset()))
-                except (ValueError, KeyError, TypeError):
-                    bad += 1    # ingest validates, so this is rare; the processor DLQs it
-            if len(rows) >= FLUSH_ROWS or (rows and time.time() - last_flush >= FLUSH_S):
+                except (ValueError, KeyError, TypeError) as exc:
+                    # ingest validates, so this is rare; keep it anyway (the processor also DLQs it)
+                    bad.append(bad_record(msg.value(), msg.partition(), msg.offset(), exc))
+            pending = len(rows) + len(bad)
+            if len(rows) >= FLUSH_ROWS or (pending and time.time() - last_flush >= FLUSH_S):
                 commit_batch()
     finally:
-        if rows:
+        if rows or bad:
             commit_batch()
         consumer.close()
     return 0
