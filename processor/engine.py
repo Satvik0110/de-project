@@ -239,6 +239,7 @@ class WindowEngine:
             "first_event_time": iso(st.first_ts),
             "sample_event_ids": list(st.sample_ids),
             "trigger_event_id": ev.event_id,
+            "first_detected_at": iso(now),   # never changes; detected_at = latest version
             "detected_at": iso(now),
             "detection_latency_ms": round((now - ev.ingest_ts) * 1000, 1) if ev.ingest_ts else None,
             "processor": self.processor_info,

@@ -76,7 +76,7 @@ def upsert_alert(cur, a: dict) -> None:
 
 def refresh_incident(cur, incident_id) -> None:
     """Recompute an incident from its alerts (cheap: a handful of rows)."""
-    cur.execute("""SELECT rule_name, tactic, severity, first_event_time, last_event_time
+    cur.execute("""SELECT rule_name, tactic, severity, first_event_time, last_event_time, count
                    FROM alerts WHERE incident_id = %s ORDER BY first_event_time, last_event_time""", (incident_id,))
     rows = cur.fetchall()
     rules, tactics = [], []
@@ -90,13 +90,15 @@ def refresh_incident(cur, incident_id) -> None:
         level = min(level + 1, len(SEVERITIES) - 1)
     # updated_at moves only when the incident's content changes; the summariser keys off it.
     cur.execute("""UPDATE incidents SET first_seen = %(first)s, last_seen = %(last)s,
-                       updated_at = CASE WHEN (severity, tactics, rules, alert_count)
-                                IS DISTINCT FROM (%(sev)s, %(tactics)s::text[], %(rules)s::text[], %(n)s)
+                       updated_at = CASE WHEN (severity, tactics, rules, alert_count, events)
+                                IS DISTINCT FROM (%(sev)s, %(tactics)s::text[], %(rules)s::text[], %(n)s, %(ev)s)
                                 THEN now() ELSE updated_at END,
-                       severity = %(sev)s, tactics = %(tactics)s, rules = %(rules)s, alert_count = %(n)s
+                       severity = %(sev)s, tactics = %(tactics)s, rules = %(rules)s, alert_count = %(n)s,
+                       events = %(ev)s
                    WHERE incident_id = %(id)s""",
                 {"first": min(r[3] for r in rows), "last": max(r[4] for r in rows), "sev": SEVERITIES[level],
-                 "tactics": tactics, "rules": rules, "n": len(rows), "id": incident_id})
+                 "tactics": tactics, "rules": rules, "n": len(rows), "ev": sum(r[5] for r in rows),
+                 "id": incident_id})
 
 
 def upsert_aggregate(cur, g: dict) -> None:
@@ -124,12 +126,12 @@ def insert_metrics(cur, m: dict) -> None:
 
 def upsert_campaign(cur, c: dict) -> None:
     cur.execute("""
-        INSERT INTO campaigns (campaign_id, scenario, attacker_ips, target_user, expected_rules,
+        INSERT INTO campaigns (campaign_id, scenario, malicious, attacker_ips, target_user, expected_rules,
                                started_at, ended_at, requests)
-        VALUES (%(campaign_id)s, %(scenario)s, %(attacker_ips)s::inet[], %(target_user)s,
+        VALUES (%(campaign_id)s, %(scenario)s, %(malicious)s, %(attacker_ips)s::inet[], %(target_user)s,
                 %(expected_rules)s, %(started_at)s, %(ended_at)s, %(requests)s)
         ON CONFLICT (campaign_id) DO UPDATE SET ended_at = EXCLUDED.ended_at, requests = EXCLUDED.requests
-    """, c)
+    """, {"malicious": True, **c})
 
 
 def ours(v: dict) -> bool:

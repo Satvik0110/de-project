@@ -98,5 +98,7 @@ async def summarise_pending(conn, client, use_llm: bool) -> None:
                 text, source = await llm(client, inc, alerts), "llm"
             except Exception as exc:          # rate limit, network, bad key: never break the demo
                 log.warning("LLM failed for %s (%s); using template", inc["incident_id"], exc)
-        await conn.execute("UPDATE incidents SET summary = %s, summary_source = %s, summarised_at = now() "
-                           "WHERE incident_id = %s", (text, source, inc["incident_id"]))
+        # summarised_at = the version we READ, not when the reply arrived: if the incident
+        # changed while the model was answering, updated_at > summarised_at and it is redone.
+        await conn.execute("UPDATE incidents SET summary = %s, summary_source = %s, summarised_at = %s "
+                           "WHERE incident_id = %s", (text, source, inc["updated_at"], inc["incident_id"]))

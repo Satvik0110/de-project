@@ -19,7 +19,8 @@ start() {  # name, command...
   if [ -f "logs/$name.pid" ] && kill -0 "$(cat "logs/$name.pid")" 2>/dev/null; then
     echo "  $name already running"; return
   fi
-  nohup "$@" > "logs/$name.log" 2>&1 &
+  # own session/process group, so stop.sh can kill the whole tree (npm -> vite, etc.)
+  setsid nohup "$@" > "logs/$name.log" 2>&1 < /dev/null &
   echo $! > "logs/$name.pid"
   echo "  started $name"
 }

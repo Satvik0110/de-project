@@ -50,6 +50,9 @@ class Scenario:
     run: Callable[["Campaign"], Awaitable[None]]
     botnet: int = 0                         # >0: this many source IPs instead of one
     target_user: str | None = None
+    malicious: bool = True                  # False: legitimate activity that merely looks suspicious
+    subnet: str = "127.66.0"                # where the actor's IP comes from
+    duration_s: int = 5
 
 
 class Campaign:
@@ -131,6 +134,29 @@ async def _kill_chain(c: Campaign) -> None:
         await c.pace(0.3)
 
 
+async def _low_and_slow(c: Campaign) -> None:
+    """Brute force paced at one guess per 15 s: never 5 in any 60 s window."""
+    for pw in random.sample(WORDLIST, 12):
+        await c.attacker.login("deploy", pw)
+        await c.pace(15)
+
+
+async def _admin_scan(c: Campaign) -> None:
+    """IT's weekly service inventory: the same probes as an attacker's scan, from an admin host."""
+    await _scan(c)
+
+
+async def _office_nat(c: Campaign) -> None:
+    """9am after a forced password change: employees behind one office NAT IP log in,
+    most mistype the new password once, then get it right."""
+    for i, (user, pw) in enumerate(EMPLOYEES.items()):
+        if i < 6:
+            await c.attacker.login(user, pw + "!")
+            await c.pace(0.3)
+        await c.attacker.login(user, pw)
+        await c.pace(0.3)
+
+
 SCENARIOS = [
     Scenario("port_scan", "Port Scan", "Discovery", "T1046",
              "One attacker probes 20 service ports on the server.", ("port_scan",), _scan),
@@ -154,7 +180,17 @@ SCENARIOS = [
              "Port scan, injection probes, API probing, brute force, then login with the cracked "
              "password and export data — all from one attacker.",
              ("port_scan", "injection_probe", "api_access_probing", "brute_force", "brute_force_success"),
-             _kill_chain),
+             _kill_chain, duration_s=25),
+    # -- harder cases: an attack built to evade the rules, and legitimate activity that looks hostile
+    Scenario("low_and_slow", "Low-and-Slow Brute Force", "Credential Access", "T1110.001",
+             "12 guesses at one account, one every 15 s, so no 60 s window ever reaches the threshold. "
+             "Expected to evade detection.", ("brute_force",), _low_and_slow, duration_s=180),
+    Scenario("admin_scan", "IT Inventory Scan", "Benign", "—",
+             "An IT admin workstation scans the server's service ports for the weekly inventory.",
+             (), _admin_scan, malicious=False, subnet="127.0.3"),
+    Scenario("office_nat", "Office NAT Login Rush", "Benign", "—",
+             "After a forced password change, 8 employees behind one office NAT IP log in; 6 mistype once.",
+             (), _office_nat, malicious=False, subnet="127.0.2", duration_s=6),
 ]
 BY_ID = {s.id: s for s in SCENARIOS}
 

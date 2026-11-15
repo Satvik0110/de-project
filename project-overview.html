@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SIEM Project Guide</title>
+<style>
+:root{
+  --bg:#fbfaf7; --panel:#ffffff; --ink:#1d1f23; --muted:#5d636c; --line:#e3e1db;
+  --accent:#2f5bd3; --accent-soft:#e8eefc; --red:#c2412d; --red-soft:#fbe9e5;
+  --green:#2c7a4b; --green-soft:#e5f3ea; --amber:#9a6a00; --amber-soft:#fbf1d9;
+  --code:#f2f0ea; --purple:#6b47c4; --purple-soft:#efe9fb;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15171b; --panel:#1c1f24; --ink:#e7e8ea; --muted:#9aa1ab; --line:#2e323a;
+    --accent:#7d9cf0; --accent-soft:#1f2a45; --red:#ef8a76; --red-soft:#3a221d;
+    --green:#6cc790; --green-soft:#1b3326; --amber:#e6b84f; --amber-soft:#382d14;
+    --code:#23272e; --purple:#b39af0; --purple-soft:#2b2340;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15171b; --panel:#1c1f24; --ink:#e7e8ea; --muted:#9aa1ab; --line:#2e323a;
+  --accent:#7d9cf0; --accent-soft:#1f2a45; --red:#ef8a76; --red-soft:#3a221d;
+  --green:#6cc790; --green-soft:#1b3326; --amber:#e6b84f; --amber-soft:#382d14;
+  --code:#23272e; --purple:#b39af0; --purple-soft:#2b2340;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.wrap{display:grid;grid-template-columns:260px minmax(0,1fr);max-width:1200px;margin:0 auto}
+nav{position:sticky;top:0;height:100vh;overflow:auto;padding:28px 18px;border-right:1px solid var(--line);font-size:14px}
+nav b{display:block;margin-bottom:10px;font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+nav a{display:block;padding:4px 8px;border-radius:6px;color:var(--ink);text-decoration:none}
+nav a:hover{background:var(--accent-soft)}
+nav a.sub{padding-left:22px;color:var(--muted);font-size:13px}
+main{padding:32px 40px 80px;min-width:0}
+h1{font-size:34px;line-height:1.2;margin:0 0 8px}
+h2{font-size:25px;margin:56px 0 12px;padding-top:12px;border-top:1px solid var(--line)}
+h3{font-size:19px;margin:30px 0 8px}
+h4{font-size:16px;margin:20px 0 6px}
+p{margin:10px 0}
+.lead{font-size:18px;color:var(--muted);max-width:780px}
+.num{color:var(--accent);font-variant-numeric:tabular-nums;margin-right:8px}
+code{background:var(--code);padding:1px 6px;border-radius:4px;font-size:.88em;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:var(--code);padding:14px 16px;border-radius:8px;overflow:auto;font-size:13.5px;line-height:1.5}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;margin:14px 0;font-size:14.5px;background:var(--panel)}
+th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:var(--code);font-weight:600}
+.tw{overflow-x:auto}
+.box{border:1px solid var(--line);border-left:4px solid var(--accent);background:var(--panel);border-radius:8px;padding:12px 16px;margin:16px 0}
+.box.why{border-left-color:var(--purple);background:var(--purple-soft)}
+.box.warn{border-left-color:var(--amber);background:var(--amber-soft)}
+.box.good{border-left-color:var(--green);background:var(--green-soft)}
+.box.bad{border-left-color:var(--red);background:var(--red-soft)}
+.box b.t{display:block;margin-bottom:2px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:14px 0}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.card h4{margin:0 0 4px}
+.card p{margin:0;font-size:14.5px;color:var(--muted)}
+.tag{display:inline-block;font-size:12px;padding:1px 8px;border-radius:99px;margin-right:4px;border:1px solid var(--line)}
+.tag.r{background:var(--red-soft);color:var(--red);border-color:transparent}
+.tag.b{background:var(--accent-soft);color:var(--accent);border-color:transparent}
+.tag.g{background:var(--green-soft);color:var(--green);border-color:transparent}
+.tag.a{background:var(--amber-soft);color:var(--amber);border-color:transparent}
+ol.steps{counter-reset:s;list-style:none;padding:0}
+ol.steps>li{counter-increment:s;position:relative;padding:10px 0 10px 46px;border-bottom:1px dashed var(--line)}
+ol.steps>li::before{content:counter(s);position:absolute;left:0;top:10px;width:30px;height:30px;border-radius:50%;background:var(--accent);color:var(--bg);display:grid;place-items:center;font-weight:700;font-size:14px}
+svg{max-width:100%;height:auto;display:block}
+svg text{font-family:system-ui,sans-serif;fill:var(--ink)}
+.fig{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;margin:16px 0}
+.cap{font-size:13.5px;color:var(--muted);margin-top:6px}
+.toggle{position:fixed;right:16px;top:12px;z-index:5;background:var(--panel);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:6px 10px;cursor:pointer;font-size:13px}
+@media (max-width:860px){
+  .wrap{grid-template-columns:1fr}
+  nav{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line);padding:16px}
+  main{padding:20px 16px 60px}
+  h1{font-size:27px}
+}
+</style>
+</head>
+<body>
+<button class="toggle" id="tg" aria-label="Toggle theme">◐ theme</button>
+<div class="wrap">
+<nav>
+  <b>Contents</b>
+  <a href="#s1"><span class="num">1</span>What problem we solve</a>
+  <a href="#s2"><span class="num">2</span>The big picture</a>
+  <a href="#s3"><span class="num">3</span>Life of one event</a>
+  <a href="#s4"><span class="num">4</span>Red team: simulator</a>
+  <a href="#s5"><span class="num">5</span>Defended systems & shipper</a>
+  <a href="#s6"><span class="num">6</span>Ingest & the contract</a>
+  <a href="#s7"><span class="num">7</span>Kafka</a>
+  <a href="#s8"><span class="num">8</span>Stream processor</a>
+  <a class="sub" href="#s8a">Windows & panes</a>
+  <a class="sub" href="#s8b">Watermark & lateness</a>
+  <a class="sub" href="#s8c">Dedup</a>
+  <a class="sub" href="#s8d">The 10 rules</a>
+  <a class="sub" href="#s8e">Early alerting</a>
+  <a class="sub" href="#s8f">Crash safety</a>
+  <a href="#s9"><span class="num">9</span>Data lake (Parquet)</a>
+  <a href="#s10"><span class="num">10</span>Warehouse (Postgres)</a>
+  <a href="#s11"><span class="num">11</span>Incidents</a>
+  <a href="#s12"><span class="num">12</span>AI summaries</a>
+  <a href="#s13"><span class="num">13</span>Dashboard & UIs</a>
+  <a href="#s14"><span class="num">14</span>Self-evaluation</a>
+  <a href="#s15"><span class="num">15</span>Pipeline health</a>
+  <a href="#s16"><span class="num">16</span>Edge cases</a>
+  <a href="#s17"><span class="num">17</span>Results</a>
+  <a href="#s18"><span class="num">18</span>What is novel</a>
+  <a href="#s19"><span class="num">19</span>Limitations</a>
+  <a href="#s20"><span class="num">20</span>Testing</a>
+  <a href="#s21"><span class="num">21</span>Running & demo</a>
+  <a href="#s22"><span class="num">22</span>Glossary</a>
+</nav>
+
+<main>
+<h1>Real-Time Cybersecurity Event Analytics Platform</h1>
+<p class="lead">This is a complete guide to the Group 4 project: what it does, how each part works, why we built it that way, which edge cases it handles, and where its limits are. Read it top to bottom. Each section builds on the one before it.</p>
+
+<!-- ================================================================ -->
+<h2 id="s1"><span class="num">1</span>What problem we are solving</h2>
+<p>Every company runs computers that get attacked: people guess passwords, scan for open ports, try to inject code into websites, or flood a server with requests. Each of those computers writes <b>logs</b>, lines like "someone at IP X failed to log in as user Y at 10:03:21".</p>
+<p>A <b>SIEM</b> (Security Information and Event Management system) collects all of those logs in one place and watches them for patterns that mean "attack". Splunk, Elastic Security and Microsoft Sentinel are well-known commercial SIEMs.</p>
+<p>A traditional SIEM stores the logs first and runs searches on them every few minutes, so an attack can be well under way before anyone notices. Our project is a <b>stream-first SIEM</b>: it checks every event the moment it arrives, as it flows past, and raises an alert within about <b>50 milliseconds</b>. All the data is also stored for later analysis.</p>
+
+<div class="box why"><b class="t">In one sentence</b>We built a small but complete security operations centre on a laptop. One side attacks a fake company network, the network logs what happens, a streaming data pipeline detects the attacks in real time, stores everything in two kinds of storage, and a dashboard explains what happened. It even grades how well it did.</div>
+
+<p>The project is a data engineering project first. Security is the application, and the interesting parts are the pipeline problems underneath: ordering, duplicates, late data, crash recovery, storage layout and freshness.</p>
+
+<!-- ================================================================ -->
+<h2 id="s2"><span class="num">2</span>The big picture</h2>
+<p>There are three groups of parts. The <b style="color:var(--red)">red team</b> attacks. The <b>defended network</b> gets attacked and writes logs. The <b style="color:var(--accent)">blue team</b> is the data pipeline that detects, stores and shows.</p>
+
+<div class="fig">
+<svg viewBox="0 0 980 520" role="img" aria-label="Architecture diagram">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--muted)"/></marker>
+  </defs>
+  <g font-size="13">
+  <!-- red team -->
+  <rect x="10" y="20" width="190" height="200" rx="10" fill="var(--red-soft)" stroke="var(--red)"/>
+  <text x="105" y="44" text-anchor="middle" font-weight="700" style="fill:var(--red)">RED TEAM</text>
+  <rect x="25" y="58" width="160" height="66" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="105" y="80" text-anchor="middle" font-weight="600">Attack simulator :8001</text>
+  <text x="105" y="98" text-anchor="middle" font-size="11.5">attackers 127.66.x.x</text>
+  <text x="105" y="114" text-anchor="middle" font-size="11.5">employees 127.0.1.x</text>
+  <rect x="25" y="140" width="160" height="64" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="105" y="166" text-anchor="middle" font-weight="600">Red console :5173</text>
+  <text x="105" y="184" text-anchor="middle" font-size="11.5">launch attacks</text>
+  <line x1="105" y1="140" x2="105" y2="126" stroke="var(--muted)" marker-end="url(#ar)"/>
+
+  <!-- defended -->
+  <rect x="250" y="20" width="200" height="200" rx="10" fill="var(--amber-soft)" stroke="var(--amber)"/>
+  <text x="350" y="44" text-anchor="middle" font-weight="700" style="fill:var(--amber)">DEFENDED NETWORK</text>
+  <rect x="265" y="58" width="170" height="54" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="350" y="80" text-anchor="middle" font-weight="600">Target web app</text>
+  <text x="350" y="98" text-anchor="middle" font-size="11.5">127.0.10.1:8002</text>
+  <rect x="265" y="122" width="170" height="54" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="350" y="144" text-anchor="middle" font-weight="600">Network sensor</text>
+  <text x="350" y="162" text-anchor="middle" font-size="11.5">ports + 20 workstations</text>
+  <text x="350" y="204" text-anchor="middle" font-size="11.5">each has a log shipper</text>
+  <line x1="200" y1="85" x2="263" y2="85" stroke="var(--muted)" marker-end="url(#ar)"/>
+  <line x1="200" y1="110" x2="263" y2="145" stroke="var(--muted)" marker-end="url(#ar)"/>
+  <text x="226" y="76" font-size="11" text-anchor="middle">HTTP</text>
+  <text x="222" y="142" font-size="11" text-anchor="middle">TCP</text>
+
+  <!-- ingest -->
+  <rect x="500" y="80" width="130" height="64" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="565" y="106" text-anchor="middle" font-weight="600">Ingest API</text>
+  <text x="565" y="124" text-anchor="middle" font-size="11.5">:8000 validate</text>
+  <line x1="450" y1="112" x2="498" y2="112" stroke="var(--muted)" marker-end="url(#ar)"/>
+  <text x="474" y="104" font-size="11" text-anchor="middle">logs</text>
+
+  <!-- kafka -->
+  <rect x="680" y="60" width="140" height="104" rx="7" fill="var(--accent-soft)" stroke="var(--accent)"/>
+  <text x="750" y="88" text-anchor="middle" font-weight="700" style="fill:var(--accent)">Kafka</text>
+  <text x="750" y="108" text-anchor="middle" font-size="11.5">events.raw</text>
+  <text x="750" y="124" text-anchor="middle" font-size="11.5">3 partitions</text>
+  <text x="750" y="140" text-anchor="middle" font-size="11.5">key = src_ip</text>
+  <line x1="630" y1="112" x2="678" y2="112" stroke="var(--muted)" marker-end="url(#ar)"/>
+  <text x="654" y="140" font-size="11" text-anchor="middle">DLQ</text>
+
+  <!-- consumers -->
+  <rect x="860" y="20" width="110" height="60" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="915" y="46" text-anchor="middle" font-weight="600">Stream</text>
+  <text x="915" y="63" text-anchor="middle" font-weight="600">processor</text>
+  <rect x="860" y="160" width="110" height="56" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="915" y="184" text-anchor="middle" font-weight="600">Lake writer</text>
+  <text x="915" y="202" text-anchor="middle" font-size="11.5">Parquet</text>
+  <line x1="820" y1="90" x2="858" y2="56" stroke="var(--muted)" marker-end="url(#ar)"/>
+  <line x1="820" y1="140" x2="858" y2="182" stroke="var(--muted)" marker-end="url(#ar)"/>
+
+  <!-- outputs -->
+  <rect x="680" y="270" width="290" height="60" rx="7" fill="var(--accent-soft)" stroke="var(--accent)"/>
+  <text x="825" y="294" text-anchor="middle" font-weight="600" style="fill:var(--accent)">Kafka: alerts · aggregates · metrics</text>
+  <text x="825" y="314" text-anchor="middle" font-size="11.5">+ sim.campaigns (ground truth)</text>
+  <line x1="915" y1="80" x2="915" y2="158" stroke="var(--muted)" stroke-dasharray="0"/>
+  <path d="M945 80 C 990 140, 990 230, 945 268" fill="none" stroke="var(--muted)" marker-end="url(#ar)"/>
+  <path d="M105 220 C 105 400, 500 420, 678 312" fill="none" stroke="var(--red)" stroke-dasharray="5 4" marker-end="url(#ar)"/>
+  <text x="300" y="380" font-size="11.5" style="fill:var(--red)">ground truth: what was really launched</text>
+
+  <rect x="680" y="380" width="140" height="64" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="750" y="404" text-anchor="middle" font-weight="600">Warehouse writer</text>
+  <text x="750" y="422" text-anchor="middle" font-size="11.5">Postgres + incidents</text>
+  <rect x="850" y="380" width="120" height="64" rx="7" fill="var(--panel)" stroke="var(--line)"/>
+  <text x="910" y="404" text-anchor="middle" font-weight="600">Dashboard API</text>
+  <text x="910" y="422" text-anchor="middle" font-size="11.5">:8003 · AI summaries</text>
+  <line x1="750" y1="330" x2="750" y2="378" stroke="var(--muted)" marker-end="url(#ar)"/>
+  <line x1="900" y1="330" x2="900" y2="378" stroke="var(--muted)" marker-end="url(#ar)"/>
+  <line x1="820" y1="412" x2="848" y2="412" stroke="var(--muted)" marker-end="url(#ar)"/>
+  <text x="834" y="456" font-size="11" text-anchor="middle">SQL</text>
+
+  <rect x="850" y="470" width="120" height="42" rx="7" fill="var(--accent-soft)" stroke="var(--accent)"/>
+  <text x="910" y="496" text-anchor="middle" font-weight="600" style="fill:var(--accent)">SOC dashboard :5174</text>
+  <line x1="910" y1="444" x2="910" y2="468" stroke="var(--muted)" marker-end="url(#ar)"/>
+  <text x="560" y="492" font-size="11.5" text-anchor="end">live data pushed over WebSocket; history pulled with SQL</text>
+  <line x1="565" y1="488" x2="846" y2="490" stroke="var(--muted)" stroke-dasharray="3 3"/>
+  </g>
+</svg>
+<div class="cap">Figure 1. Everything runs on one Linux laptop. Arrows show the direction data flows.</div>
+</div>
+
+<h3>All the parts at a glance</h3>
+<div class="tw"><table>
+<tr><th>Part</th><th>Folder</th><th>Job in one line</th></tr>
+<tr><td>Attack simulator</td><td><code>simulator/</code></td><td>Runs 12 scenarios (10 attacks, 2 harmless-but-suspicious) plus normal employee traffic, using real HTTP and TCP connections.</td></tr>
+<tr><td>Red console</td><td><code>frontend/</code></td><td>A web UI to launch attacks and toggle "unreliable network".</td></tr>
+<tr><td>Target web app</td><td><code>target/</code></td><td>The victim website (login, search, export). It logs every request it serves.</td></tr>
+<tr><td>Network sensor</td><td><code>sensor/</code></td><td>Logs every TCP connection attempt, including port scans the website never sees.</td></tr>
+<tr><td>Log shipper</td><td><code>shipper/</code></td><td>Forwards logs to the pipeline reliably, with a queue and retries.</td></tr>
+<tr><td>Ingest API</td><td><code>ingest/</code></td><td>The front door. It validates each event, stamps the arrival time and puts it into Kafka.</td></tr>
+<tr><td>Kafka</td><td><code>infra/</code></td><td>The central event log that every other part reads from.</td></tr>
+<tr><td>Stream processor</td><td><code>processor/</code></td><td>Detects attacks in real time with 10 rules over time windows.</td></tr>
+<tr><td>Lake writer</td><td><code>lake/</code></td><td>Stores every raw event as compressed Parquet files.</td></tr>
+<tr><td>Warehouse writer</td><td><code>warehouse/</code></td><td>Stores alerts and summaries in PostgreSQL and groups alerts into incidents.</td></tr>
+<tr><td>Dashboard API + SOC UI</td><td><code>dashboard/</code></td><td>Shows live alerts, incidents with AI summaries, the scoreboard and pipeline health.</td></tr>
+</table></div>
+
+<!-- ================================================================ -->
+<h2 id="s3"><span class="num">3</span>The life of one event, start to finish</h2>
+<p>The easiest way to understand the system is to follow one failed login from an attacker all the way to the dashboard.</p>
+<ol class="steps">
+<li><b>The attacker acts.</b> You click "Brute Force" in the red console. The simulator creates an attacker with its own IP address, say <code>127.66.0.5</code>, which sends <code>POST /login</code> with a wrong password to the target web app.</li>
+<li><b>The victim logs it.</b> The target app answers "401 wrong password". It writes a security event recording the IP it saw on the connection, the username, and the result <code>fail</code>. The attacker doesn't write this log; the defended system does.</li>
+<li><b>The shipper forwards it.</b> The event goes into the log shipper's queue. A worker POSTs it to the ingest API and retries with backoff if ingest is busy or down.</li>
+<li><b>Ingest checks it.</b> The ingest API validates the event against a fixed schema (the <i>contract</i>) and stamps <code>ingest_time</code>. It then writes the event to the Kafka topic <code>security.events.raw</code>, using the source IP as the key. A broken event goes to a dead-letter topic instead, together with the reason.</li>
+<li><b>Kafka fans it out.</b> Three independent readers (consumer groups) each get their own copy of the event: the stream processor, the lake writer and the dashboard bridge.</li>
+<li><b>The processor detects.</b> The processor drops the event if it is a duplicate or too late. Otherwise it places the event in the right 10-second time slot and updates every rule that cares about it. On the 5th failure from this IP for this user within 60 seconds, the <code>brute_force</code> rule crosses its threshold and an alert fires immediately, about 50 ms after the event arrived.</li>
+<li><b>The alert travels on.</b> The alert goes to the <code>security.alerts</code> topic. The dashboard pushes it to the browser over a WebSocket. The warehouse writer saves it in Postgres and attaches it to an <i>incident</i>.</li>
+<li><b>The raw event is archived.</b> Separately, the lake writer collects events for up to 30 seconds and writes them as a Parquet file in a folder for that hour.</li>
+<li><b>An AI explains it.</b> Once the incident has been quiet for 8 seconds, the summariser asks Gemini for a plain-English summary and saves it. If Gemini is unavailable, it uses a template instead.</li>
+<li><b>The system grades itself.</b> The simulator also published what it launched (the ground truth). The scoreboard compares that with the alerts: was the attack caught, how fast, and how much of it happened before the alert?</li>
+</ol>
+
+<!-- ================================================================ -->
+<h2 id="s4"><span class="num">4</span>Red team: the attack simulator</h2>
+<h3>What it is</h3>
+<p>The simulator is a Python FastAPI service that pretends to be a whole company's worth of people: ordinary employees doing their jobs, and attackers. It sends <b>real network traffic</b> (HTTP requests and TCP connections) to the target and the sensor. It never writes security logs itself.</p>
+
+<h3>The trick: 127.x addresses</h3>
+<p>On Linux, every address from <code>127.0.0.1</code> to <code>127.255.255.254</code> is loopback, meaning "this same machine". A program can choose which of those addresses its connection comes <i>from</i>. We use that to give every simulated machine its own real IP, all on one laptop:</p>
+<div class="tw"><table>
+<tr><th>Who</th><th>Addresses</th></tr>
+<tr><td>Employees (normal users)</td><td><code>127.0.1.x</code></td></tr>
+<tr><td>Office behind one NAT router</td><td><code>127.0.2.x</code></td></tr>
+<tr><td>IT administrators</td><td><code>127.0.3.x</code></td></tr>
+<tr><td>Server (target app + sensor ports)</td><td><code>127.0.10.1</code></td></tr>
+<tr><td>Workstations (for host sweeps)</td><td><code>127.0.10.2</code> to <code>.21</code></td></tr>
+<tr><td>Attackers</td><td><code>127.66.0.x</code> (each campaign gets a fresh IP)</td></tr>
+<tr><td>Botnet</td><td><code>127.77.N.x</code></td></tr>
+</table></div>
+<div class="box why"><b class="t">Why this matters</b>The target sees the attacker's IP <i>from the kernel</i>, the same way a real server would. Nothing is "reported" by the attacker, so the source IP cannot be faked through a header. This also lets us tell attackers, employees and admins apart, which the self-evaluation depends on.</div>
+
+<h3>The 12 scenarios</h3>
+<div class="tw"><table>
+<tr><th>Scenario</th><th>Type</th><th>What it does</th><th>Rule(s) that should catch it</th></tr>
+<tr><td>Port scan</td><td><span class="tag r">attack</span></td><td>Tries many ports on the server</td><td>port_scan</td></tr>
+<tr><td>Host sweep</td><td><span class="tag r">attack</span></td><td>Tries one port (3389) on 20 workstations</td><td>host_sweep</td></tr>
+<tr><td>Injection probe</td><td><span class="tag r">attack</span></td><td>Sends SQL, command, path-traversal, template and script injection payloads in requests</td><td>injection_probe</td></tr>
+<tr><td>Brute force</td><td><span class="tag r">attack</span></td><td>Many wrong passwords for one user</td><td>brute_force</td></tr>
+<tr><td>Password spray</td><td><span class="tag r">attack</span></td><td>One common password against many users</td><td>password_spray</td></tr>
+<tr><td>Distributed brute force</td><td><span class="tag r">attack</span></td><td>A botnet of 12 IPs all guessing one account (<code>sysadmin</code>)</td><td>distributed_brute_force</td></tr>
+<tr><td>API flood</td><td><span class="tag r">attack</span></td><td>Hammers the API with requests</td><td>api_flood</td></tr>
+<tr><td>Connection flood</td><td><span class="tag r">attack</span></td><td>Opens many TCP connections to one service</td><td>connection_flood</td></tr>
+<tr><td>Multi-stage intrusion (kill chain)</td><td><span class="tag r">attack</span></td><td>Scan → injection → brute force → successful login → data export</td><td>several, chained into one incident</td></tr>
+<tr><td>Low-and-slow brute force</td><td><span class="tag a">hard case</span></td><td>12 guesses, one every 15 s, so it never reaches 5 in a minute</td><td>brute_force, <b>missed by design</b></td></tr>
+<tr><td>IT inventory scan</td><td><span class="tag g">benign</span></td><td>An admin legitimately scans ports</td><td>none, but port_scan fires (a false alarm)</td></tr>
+<tr><td>Office NAT login rush</td><td><span class="tag g">benign</span></td><td>8 employees behind one IP log in at 9 am; 6 mistype once</td><td>none, but password_spray fires (a false alarm)</td></tr>
+</table></div>
+
+<h3>Background traffic</h3>
+<p>While it is switched on, 24 employee hosts make normal requests about 5 times a second: logging in, searching and exporting. This is the "noise" that attacks hide in. A good detector stays silent on it, and ours raised <b>0 alerts</b> on employee traffic.</p>
+
+<h3>Ground truth</h3>
+<p>Every time a scenario starts or finishes, the simulator publishes a record to its own Kafka topic, <code>security.sim.campaigns</code>. The record holds the scenario name, the attacker IPs, start and end times, the expected rules, and whether it is malicious. <b>The detector never reads this topic.</b> Only the scoreboard does.</p>
+
+<!-- ================================================================ -->
+<h2 id="s5"><span class="num">5</span>Defended systems and the log shipper</h2>
+<h3>Target web app</h3>
+<p>A small FastAPI website at <code>127.0.10.1:8002</code>. It is deliberately unprotected (no rate limiting, no lockout) so attacks actually happen. It has:</p>
+<ul>
+<li><code>/login</code>: a username and password check against a small set of users</li>
+<li><code>/api/search</code>: a search endpoint where injection payloads arrive</li>
+<li><code>/api/export</code>: data export that needs a bearer token, the "stealing data" step</li>
+</ul>
+<p>A middleware writes one security event per request, with the peer IP, the user, and the status (<code>success</code>, <code>fail</code> or <code>denied</code>). It also stores the decoded request line in <code>raw_payload</code>, so injection patterns can be matched later.</p>
+
+<h3>Network sensor</h3>
+<p>A web app only sees traffic that reaches its own port. A port scan mostly hits ports where nothing is listening, so the website would never know. The sensor fills that gap:</p>
+<ul>
+<li><b>Open ports</b> 2222 (SSH), 3306 (MySQL), 6379 (Redis), 8080 and 9200 answer with a realistic banner and are logged as <code>success</code>.</li>
+<li>15 <b>closed ports</b> immediately reset the connection (an RST packet) and are logged as <code>denied</code>.</li>
+<li>Port 3389 (remote desktop) on <b>20 workstations</b> catches horizontal host sweeps.</li>
+</ul>
+
+<h3>Log shipper</h3>
+<p>Both the target and the sensor use the same shipper, our small version of what Filebeat or Fluent Bit do in real companies:</p>
+<ul>
+<li>A <b>bounded queue</b> of 10,000 events, so memory can't grow forever. If the queue is full, the event is counted as dropped, not silently lost.</li>
+<li><b>8 workers</b> POST events to ingest.</li>
+<li><b>Retry with backoff</b> when ingest replies "503 busy" or the connection fails.</li>
+<li>Counters for sent, rejected, failed and dropped events, which the pipeline-health page reads.</li>
+</ul>
+<h4>"Unreliable network" (chaos) mode</h4>
+<p>Real networks misbehave, and a demo where everything is perfect proves nothing. When chaos mode is on, the shipper deliberately:</p>
+<ul>
+<li>sends <b>10% of events twice</b>, as a retry after a lost acknowledgement would. This tests deduplication.</li>
+<li>delays <b>10% of events by 2–8 s</b>, so they arrive out of order but still in time. This tests event-time windows.</li>
+<li>delays <b>2% of events by 90 s</b>, a backlog flushed after an outage, which is too late. This tests the watermark.</li>
+</ul>
+
+<!-- ================================================================ -->
+<h2 id="s6"><span class="num">6</span>Ingest API and the event contract</h2>
+<p>The ingest API (port 8000) is the single front door into the pipeline. Its flow is <b>validate → stamp <code>ingest_time</code> → write to Kafka → reply 202</b>.</p>
+<h3>The contract</h3>
+<p>Every event must match a fixed JSON schema (<code>contracts/event.schema.json</code>, version 1, frozen):</p>
+<div class="tw"><table>
+<tr><th>Field</th><th>Meaning</th><th>Rules</th></tr>
+<tr><td><code>event_id</code></td><td>Unique ID</td><td>UUID, required. Used for dedup.</td></tr>
+<tr><td><code>event_time</code></td><td>When it happened at the source</td><td>Required, and must include a timezone offset. Drives all windowing.</td></tr>
+<tr><td><code>ingest_time</code></td><td>When it arrived</td><td>Set by the server, overwriting any value the client sent.</td></tr>
+<tr><td><code>source_type</code></td><td>Kind of log</td><td><code>auth</code>, <code>network</code> or <code>api</code></td></tr>
+<tr><td><code>src_ip</code></td><td>Who did it</td><td>Required. Becomes the Kafka key.</td></tr>
+<tr><td><code>dest_ip_port</code></td><td>What they touched</td><td><code>ip:port</code>, optional</td></tr>
+<tr><td><code>user</code></td><td>Account involved</td><td>Optional</td></tr>
+<tr><td><code>status</code></td><td>Outcome</td><td><code>success</code>, <code>fail</code> or <code>denied</code></td></tr>
+<tr><td><code>raw_payload</code></td><td>Extra details</td><td>Free-form, for example the request path</td></tr>
+</table></div>
+<div class="box why"><b class="t">Why a strict, frozen contract</b>
+<ul>
+<li>Unknown fields are rejected, so if a source changes its log format the change shows up immediately at the door instead of silently corrupting reports weeks later.</li>
+<li>A timezone is required because "10:03" without one is ambiguous, and every window depends on time.</li>
+<li>Invalid events are not thrown away. They go to a <b>dead-letter queue</b> (<code>security.events.dlq</code>) with the reason, so the bad input is kept as evidence and can be debugged.</li>
+</ul></div>
+
+<!-- ================================================================ -->
+<h2 id="s7"><span class="num">7</span>Kafka: the backbone</h2>
+<p>Kafka is a durable, append-only log. Producers add messages to the end, and consumers read at their own pace, each remembering its position (its <i>offset</i>). We run Kafka 4.3.1 in KRaft mode, which needs no ZooKeeper.</p>
+<div class="tw"><table>
+<tr><th>Topic</th><th>Partitions</th><th>Written by → read by</th></tr>
+<tr><td><code>security.events.raw</code></td><td>3, key = src_ip</td><td>ingest → processor, lake writer</td></tr>
+<tr><td><code>security.events.dlq</code></td><td>1</td><td>ingest, processor (rejected events plus reason)</td></tr>
+<tr><td><code>security.alerts</code></td><td>1</td><td>processor → warehouse writer, dashboard</td></tr>
+<tr><td><code>security.aggregates</code></td><td>1</td><td>processor → warehouse writer</td></tr>
+<tr><td><code>security.pipeline.metrics</code></td><td>1</td><td>processor → warehouse writer, dashboard</td></tr>
+<tr><td><code>security.sim.campaigns</code></td><td>1</td><td>simulator → warehouse writer (scoreboard only)</td></tr>
+</table></div>
+<h3>Key design decisions</h3>
+<div class="grid">
+<div class="card"><h4>Key = source IP</h4><p>Kafka keeps order only within a partition. Keying by IP puts all events from one attacker in one partition, in order, so "5 failures then a success" is seen in the right sequence.</p></div>
+<div class="card"><h4>One consumer group per job</h4><p>The processor, lake writer, warehouse writer and dashboard each read independently. If Postgres is slow, detection doesn't wait. Each layer can be restarted or replayed alone.</p></div>
+<div class="card"><h4>acks=all + idempotent producers</h4><p>A write counts as done only once Kafka has stored it. Idempotent producers stop network retries from creating duplicate copies inside Kafka.</p></div>
+<div class="card"><h4>Auto topic creation off</h4><p>Topics are created explicitly by <code>infra/create-topics.sh</code>, so a typo in a topic name fails loudly instead of creating a ghost topic.</p></div>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="s8"><span class="num">8</span>The stream processor (the brain)</h2>
+<p>The processor follows the steps from our Lab 3 design: <b>parse & validate → place into event-time windows → advance the watermark → drop duplicates → evaluate rules → emit alerts</b>. It is plain Python with no Flink or Spark, so every mechanism is visible and explainable.</p>
+
+<h3 id="s8a">8.1 Windows and panes</h3>
+<p>Attacks are about counts over time ("5 failures in a minute"), so we need windows. We use <b>sliding windows</b> 60 seconds long that start every 10 seconds, so a burst is never split awkwardly across two windows.</p>
+<p>A naive implementation copies each event into all 6 windows that overlap it. Instead, we split time into <b>10-second panes</b>. Each event goes into exactly one pane, and a window is simply 6 consecutive panes added together.</p>
+<div class="fig">
+<svg viewBox="0 0 760 170" role="img" aria-label="Panes and windows">
+  <g font-size="12">
+  <text x="10" y="22" font-weight="600">Panes (10 s)</text>
+  <g>
+    <rect x="110" y="8" width="70" height="24" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="145" y="25" text-anchor="middle">0–10</text>
+    <rect x="180" y="8" width="70" height="24" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="215" y="25" text-anchor="middle">10–20</text>
+    <rect x="250" y="8" width="70" height="24" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="285" y="25" text-anchor="middle">20–30</text>
+    <rect x="320" y="8" width="70" height="24" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="355" y="25" text-anchor="middle">30–40</text>
+    <rect x="390" y="8" width="70" height="24" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="425" y="25" text-anchor="middle">40–50</text>
+    <rect x="460" y="8" width="70" height="24" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="495" y="25" text-anchor="middle">50–60</text>
+    <rect x="530" y="8" width="70" height="24" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="565" y="25" text-anchor="middle">60–70</text>
+    <rect x="600" y="8" width="70" height="24" fill="var(--accent-soft)" stroke="var(--accent)"/><text x="635" y="25" text-anchor="middle">70–80</text>
+  </g>
+  <text x="10" y="70" font-weight="600">Window A</text>
+  <rect x="110" y="56" width="420" height="20" rx="4" fill="var(--purple-soft)" stroke="var(--purple)"/><text x="320" y="71" text-anchor="middle">0–60 s = panes 1..6</text>
+  <text x="10" y="104" font-weight="600">Window B</text>
+  <rect x="180" y="90" width="420" height="20" rx="4" fill="var(--purple-soft)" stroke="var(--purple)"/><text x="390" y="105" text-anchor="middle">10–70 s = panes 2..7</text>
+  <text x="10" y="138" font-weight="600">Window C</text>
+  <rect x="250" y="124" width="420" height="20" rx="4" fill="var(--purple-soft)" stroke="var(--purple)"/><text x="460" y="139" text-anchor="middle">20–80 s = panes 3..8</text>
+  <circle cx="345" cy="20" r="5" fill="var(--red)"/><text x="690" y="25" style="fill:var(--red)">● event stored once</text>
+  </g>
+</svg>
+<div class="cap">Figure 2. The red event belongs to windows A, B and C but is stored only once, in pane 30–40.</div>
+</div>
+<p><b>Event time, not arrival time:</b> windows use <code>event_time</code>, when the thing actually happened. An event delayed in the network still counts in the minute it belongs to.</p>
+
+<h3 id="s8b">8.2 Watermark: when is a window "done"?</h3>
+<p>With event time, the processor can never be completely sure no more events for 10:03 will arrive. The <b>watermark</b> is its rule for deciding: <i>"I assume nothing arrives more than 10 seconds late."</i></p>
+<pre><code>watermark = newest event_time seen − 10 seconds
+a window closes when the watermark passes its end</code></pre>
+<ul>
+<li>An event for a window that has already closed is <b>late</b>. It is dropped and counted, so the count is visible on the dashboard.</li>
+<li><b>Idle stream:</b> if nothing arrives for 5 s, the watermark follows the wall clock, so the last windows still close.</li>
+<li><b>Broken clocks:</b> an event more than 60 s in the future goes to the DLQ. Otherwise it would jump the watermark forward and make every honest event look late.</li>
+</ul>
+<div class="box why"><b class="t">Trade-off</b>A bigger lateness allowance accepts more late data but closes windows, and frees memory, later. 10 s suits a LAN. The 2–8 s chaos delays pass, and the 90 s backlog is dropped, which is exactly what the demo shows.</div>
+
+<h3 id="s8c">8.3 Deduplication</h3>
+<p>Our delivery is <i>at-least-once</i>: retries can deliver the same event twice. The processor remembers <code>event_id</code>s, but <b>only for windows that are still open</b>. Once a window closes, its IDs are forgotten. A duplicate of an older event would be late anyway, so memory stays bounded by the window length no matter how long the system runs.</p>
+
+<h3 id="s8d">8.4 The 10 detection rules</h3>
+<p>Each rule has four parts: which events it looks at, how it groups them (the <i>key</i>), what it measures in a window, and a threshold. Each one is tagged with a <b>MITRE ATT&amp;CK</b> technique, the industry-standard catalogue of attacker behaviour.</p>
+<div class="tw"><table>
+<tr><th>Rule</th><th>Fires when, within 60 s</th><th>Grouped by</th><th>ATT&amp;CK</th><th>Severity</th></tr>
+<tr><td>brute_force</td><td>≥ 5 failed logins</td><td>IP + user</td><td>T1110.001 · Credential Access</td><td>high</td></tr>
+<tr><td>password_spray</td><td>failures on ≥ 5 different accounts</td><td>IP</td><td>T1110.003 · Credential Access</td><td>high</td></tr>
+<tr><td>brute_force_success</td><td>≥ 5 failures, then a success</td><td>IP + user</td><td>T1078 · Initial Access</td><td>critical</td></tr>
+<tr><td>distributed_brute_force</td><td>one account failing from ≥ 5 IPs</td><td>user</td><td>T1110 · Credential Access</td><td>high</td></tr>
+<tr><td>port_scan</td><td>≥ 10 different ports on one host</td><td>IP + host</td><td>T1046 · Discovery</td><td>medium</td></tr>
+<tr><td>host_sweep</td><td>≥ 10 different hosts</td><td>IP</td><td>T1046 · Discovery</td><td>medium</td></tr>
+<tr><td>connection_flood</td><td>≥ 30 connections to one service</td><td>IP + host + port</td><td>T1499 · Impact</td><td>medium</td></tr>
+<tr><td>injection_probe</td><td>any request matching an injection signature</td><td>IP</td><td>T1190 · Initial Access</td><td>medium</td></tr>
+<tr><td>api_flood</td><td>≥ 50 API requests</td><td>IP</td><td>T1499 · Impact</td><td>medium</td></tr>
+<tr><td>api_access_probing</td><td>≥ 10 denied or failed API calls</td><td>IP</td><td>T1595 · Reconnaissance</td><td>medium</td></tr>
+</table></div>
+<p>Injection signatures are regular expressions run on the decoded request. They cover SQL (<code>' OR</code>, <code>UNION SELECT</code>), OS commands (<code>; cat</code>), path traversal (<code>../</code>), NoSQL operators (<code>[$ne]</code>), templates (<code>{{ }}</code>), scripts (<code>&lt;script</code>), LDAP filters and CRLF header injection. Reaching 3× a threshold raises the alert one severity level. Each threshold can be changed with an environment variable.</p>
+<div class="box why"><b class="t">Why simple rules instead of machine learning?</b>Rules are explainable ("5 failures in 60 s from this IP"), need no training data, and an analyst can trust them. We only wrote rules our schema can really support; for example, there is no "impossible travel" rule because we have no geo-location field.</div>
+
+<h3 id="s8e">8.5 Early alerting: our biggest latency win</h3>
+<p>A basic windowed system alerts when a window <i>closes</i>, which can be up to 60 s plus 10 s of lateness after the attack started. Every one of our rules measures something that <b>only grows</b> (a count, or a number of distinct values), so once it crosses the threshold it can never drop back below it. We can therefore alert <b>the instant the threshold is crossed</b> with no risk of having to take the alert back.</p>
+<p>One alert goes through up to three versions, all under the <b>same alert ID</b>:</p>
+<ul>
+<li><span class="tag b">early</span> the moment the threshold is crossed</li>
+<li><span class="tag a">escalated</span> at 3× the threshold, with a higher severity</li>
+<li><span class="tag g">final</span> when the window closes, with the exact final count</li>
+</ul>
+<p><b>No alert storms:</b> sliding windows overlap, so a naive version would raise 6 alerts for one 20-second attack. While one window has alerted for a given rule and key, overlapping windows are suppressed. <b>One attack gives one alert.</b></p>
+<p>The alert ID is <i>deterministic</i>: a UUID5 hash of the rule, key and window. The same alert always gets the same ID, so writing it to Postgres again simply updates it (an <i>upsert</i>). This is how "at-least-once delivery" becomes "effectively once" in the results.</p>
+
+<h3 id="s8f">8.6 Crash safety: the commit protocol</h3>
+<p>A Kafka consumer says "I'm done up to offset N" by <i>committing</i>. Commit too early and a crash loses events. Commit too late and a crash repeats work. Our rule:</p>
+<ul>
+<li>Commit only up to the <b>oldest event still inside an open window</b>, because those events are still needed if we crash.</li>
+<li>Commit only <b>after Kafka has acknowledged</b> all the alerts we produced.</li>
+<li>Save a small checkpoint ("windows before time T are already closed") in the commit metadata.</li>
+</ul>
+<p>After a restart, the processor re-reads Kafka from the committed point, rebuilds its open windows, and uses the checkpoint to <b>avoid re-emitting closed windows</b>. In testing, a restart lost 0 events and re-emitted 0 alerts.</p>
+
+<h3>Metrics the processor publishes (every 5 s)</h3>
+<p>Events per second, consumer lag, watermark delay, detection latency (p50, p95 and p99 over the last 500 alerts), per-stage latency, and counters for accepted, duplicate, late, invalid and alerts by rule. We report <b>percentiles, not averages</b>, because for alerting the slow tail is what hurts.</p>
+
+<!-- ================================================================ -->
+<h2 id="s9"><span class="num">9</span>Data lake: every raw event, in Parquet</h2>
+<p>The lake writer is a separate consumer group that saves <b>every raw event</b> for later investigation, using cheap, compressed, analytics-friendly files.</p>
+<ul>
+<li><b>Format:</b> Apache Parquet with Snappy compression. Parquet is <i>columnar</i>: all <code>src_ip</code> values are stored together, all <code>status</code> values together, and so on. A query that needs only 2 columns reads only those 2, and similar values next to each other compress well. Measured: about <b>5.2× smaller</b> than raw JSON.</li>
+<li><b>Layout:</b> Hive-style folders <code>data_lake/year=2026/month=11/day=12/hour=14/</code>, based on <b>event time in UTC</b>, so a late event still lands in its true hour. A query for "2 pm yesterday" opens only that folder. This is called <b>partition pruning</b>.</li>
+<li><b>Micro-batches:</b> a file is written every 5,000 events or 30 seconds, whichever comes first. Writing one file per event would create millions of tiny files.</li>
+<li><b>No half-written files:</b> each file is written to a temporary name, then renamed. A rename is atomic, so readers never see a partial file.</li>
+<li><b>Provenance:</b> every row keeps its Kafka partition and offset, so you can trace it back. Each file also records the raw JSON size in its metadata, which is how we measure compression.</li>
+<li><b>Delivery:</b> offsets are committed after the file is written. A crash between the two can write a row twice, so readers deduplicate on <code>event_id</code>, as the scoreboard does.</li>
+</ul>
+
+<!-- ================================================================ -->
+<h2 id="s10"><span class="num">10</span>Warehouse: curated results in PostgreSQL</h2>
+<p>The lake holds everything raw. The warehouse holds the <b>small, curated, query-ready</b> results that the dashboard needs. Postgres 16 is used through psycopg3.</p>
+<div class="tw"><table>
+<tr><th>Table</th><th>What it holds</th><th>How it is written</th></tr>
+<tr><td><code>alerts</code></td><td>Every alert with rule, severity, ATT&amp;CK tags, entity, first/last event time, first detected time</td><td>Upsert on <code>alert_id</code> (early → escalated → final update one row)</td></tr>
+<tr><td><code>incidents</code></td><td>Groups of related alerts plus the AI summary</td><td>Created and refreshed by the writer</td></tr>
+<tr><td><code>aggregates</code></td><td>Per-window statistics per source type</td><td>Upsert</td></tr>
+<tr><td><code>pipeline_metrics</code></td><td>Processor health over time</td><td>Insert</td></tr>
+<tr><td><code>campaigns</code></td><td>Ground truth from the simulator</td><td>Upsert. Read only by the scoreboard.</td></tr>
+</table></div>
+<div class="box why"><b class="t">Why both a lake and a warehouse?</b>They answer different questions. The lake answers <i>"show me every packet from this IP last Tuesday"</i>: cheap, complete, slower. The warehouse answers <i>"list today's critical incidents"</i>: small, indexed, instant. This is the standard <b>lake + warehouse</b> pattern, and it was FR3 (dual storage) in our Lab 2 requirements.</div>
+
+<!-- ================================================================ -->
+<h2 id="s11"><span class="num">11</span>Incidents: turning alerts into stories</h2>
+<p>An analyst doesn't want five separate alerts for one hacker. The warehouse writer groups alerts into <b>incidents</b>:</p>
+<ul>
+<li>The key is the attacker's IP. For distributed attacks with no single IP, it is the targeted user.</li>
+<li>Alerts join the same incident while they keep arriving <b>less than 10 minutes apart</b>. This is a <i>session window</i>: a gap of 10 quiet minutes ends the session.</li>
+<li>If an incident covers <b>2 or more ATT&amp;CK tactics</b> (for example Discovery and Credential Access), it is flagged <b>multi-stage</b> and raised one severity level.</li>
+</ul>
+<div class="box good"><b class="t">Example</b>The kill-chain scenario produces a port scan (Discovery), injection probes (Initial Access), API probing (Reconnaissance), a brute force (Credential Access) and a successful login (Initial Access). It shows up as <b>one critical, multi-stage incident</b> instead of five unrelated alerts.</div>
+
+<!-- ================================================================ -->
+<h2 id="s12"><span class="num">12</span>AI summaries (the AI part from Lab 1)</h2>
+<p>For each incident, an LLM (Gemini, through its OpenAI-compatible API) writes a short plain-English summary: what happened, the likely goal, whether anything succeeded, and the first response steps.</p>
+<ul>
+<li><b>Off the detection path:</b> the summariser runs inside the dashboard service, so a slow or failing LLM never delays an alert.</li>
+<li><b>Waits until things settle:</b> it summarises only after the incident has been quiet for 8 s, and again only if the incident's content changes. This saves free-tier quota and avoids half-finished stories.</li>
+<li><b>Privacy:</b> only alert metadata is sent (rules, counts, tactics, times), never raw logs.</li>
+<li><b>Fallback:</b> with no API key, or when the API fails, a deterministic template writes the summary. The demo never depends on the internet.</li>
+<li><b>Race fixed:</b> the summary is stamped with the incident version it describes, so a summary written for an older version can't be shown as current.</li>
+</ul>
+
+<!-- ================================================================ -->
+<h2 id="s13"><span class="num">13</span>Dashboard API and the two UIs</h2>
+<h3>Dashboard API (port 8003)</h3>
+<ul>
+<li><b>Live data is pushed.</b> A background thread reads the alerts and metrics topics from Kafka and pushes them to browsers over a WebSocket (<code>/ws/live</code>).</li>
+<li><b>History is pulled</b> with SQL from Postgres (<code>/api/alerts</code>, <code>/api/incidents</code>, <code>/api/scoreboard</code>, <code>/api/pipeline</code>).</li>
+</ul>
+<div class="box why"><b class="t">Why push for live data</b>In Lab 2 we listed a risk: dashboards that poll the database every second slow down the analytical queries. Pushing live data from Kafka removes that load from Postgres entirely.</div>
+<h3>Red console (:5173) and SOC dashboard (:5174)</h3>
+<p>Two separate React apps, like two separate rooms: the attacker's screen and the defender's screen. Put them side by side for the demo.</p>
+<div class="grid">
+<div class="card"><h4>Red console</h4><p>Attack buttons grouped as attacks, hard cases and benign; a background-traffic switch; an "unreliable network" switch; a live log of running campaigns.</p></div>
+<div class="card"><h4>SOC dashboard</h4><p>Live throughput, the alert feed with ATT&amp;CK tags, incidents with AI summaries, the detection scoreboard, and pipeline health (completeness, freshness, lag, compression).</p></div>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="s14"><span class="num">14</span>Self-evaluation: the platform grades itself</h2>
+<p>Because the simulator knows exactly what it launched, the system can check its own work. Security researchers evaluate detectors on labelled datasets such as CICIDS2017. We built that evaluation <b>into the running system</b>.</p>
+<h3>How an alert is matched to an attack</h3>
+<p>An alert belongs to a campaign if it names one of the campaign's IPs (or its target user, for per-user rules) and it first fired between the campaign's start and 2 minutes after its end.</p>
+<ul>
+<li>Alerts matched to a malicious campaign are <b>true positives</b>.</li>
+<li>Alerts matched to a benign campaign, or to nothing at all, are <b>false positives</b>.</li>
+</ul>
+
+<h3>Why precision and recall alone were not enough</h3>
+<p>Our attacks were designed to cross the thresholds, so at first precision and recall were 100%. That's true, but meaningless: it only proves the attacks were loud. We fixed this in two ways.</p>
+<h4>1. We added honest hard cases</h4>
+<div class="tw"><table>
+<tr><th>Case</th><th>Outcome</th><th>Why</th><th>Mitigation</th></tr>
+<tr><td>Low-and-slow brute force</td><td><span class="tag r">missed</span></td><td>4 guesses per minute never reaches 5 per 60 s</td><td>Longer windows, or per-account baselines</td></tr>
+<tr><td>IT inventory scan</td><td><span class="tag a">false alarm</span></td><td>An admin scan looks exactly like an attacker's scan</td><td>Allow-list the admin subnet, or lower the severity for known assets</td></tr>
+<tr><td>Office NAT login rush</td><td><span class="tag a">false alarm</span></td><td>Many users behind one IP look like a password spray</td><td>Allow-list known NAT IPs, or require a higher ratio of failures to users</td></tr>
+</table></div>
+<p>Now precision is about <b>85%</b> and recall about <b>97.6%</b>, and every miss and false alarm has a known cause.</p>
+<h4>2. We added metrics that actually vary</h4>
+<ul>
+<li><b>MTTD (mean time to detect):</b> the time from campaign start to the first alert, about 0.53 s. This includes the time the attack itself needs to reach the threshold.</li>
+<li><b>Attack seen before alert:</b> how much of the attack had already happened when we alerted. Injection is caught at about 5%, because one request is enough. Scans are caught at about 55%, because 10 ports are needed. This is computed by an <b>analytical query on the Parquet lake</b> with partition pruning, so the lake is used for real analysis, not just storage.</li>
+<li><b>Earlier than window close:</b> how much sooner early alerting fired than a window-close alert would have, about 60–70 s.</li>
+<li><b>Alert-reduction funnel:</b> 1,248 attack events → 40 alerts → 26 incidents. Suppression and grouping are what stop analysts drowning in alerts.</li>
+</ul>
+<div class="box"><b class="t">Fair play</b>Ground truth travels on a separate topic that the processor never subscribes to. Detection cannot "peek at the answers".</div>
+
+<!-- ================================================================ -->
+<h2 id="s15"><span class="num">15</span>Pipeline health: proving the data is right</h2>
+<p>A data pipeline should be able to show that it isn't losing data. The pipeline-health panel checks three things.</p>
+<ul>
+<li><b>Completeness (reconciliation):</b> events delivered by the shippers = events in Kafka = events processed = rows in the lake. Comparing counts between stages is how real data teams catch silent loss. Result: <b>3,857 shipped = 3,857 in Kafka, 0 lost</b>.</li>
+<li><b>Freshness per layer:</b> how far behind real time each layer is: detection about 70 ms, warehouse about 1 s, lake up to 30 s (its flush interval). Each layer makes a different trade-off, and the panel shows each one's consumer lag.</li>
+<li><b>Storage:</b> Parquet size compared with the raw JSON it replaced (about 5×), and the number of partitions.</li>
+</ul>
+<div class="box warn"><b class="t">A subtle bug we fixed</b>The panel once showed "2 events lost". Nothing was lost: we had read Kafka's count first and the shippers' count a moment later, and new events had arrived in between. Now the shippers are read <b>before</b> Kafka. Anything a shipper counts as delivered must already be in Kafka, so a gap would mean real loss.</div>
+
+<!-- ================================================================ -->
+<h2 id="s16"><span class="num">16</span>Edge cases and how we handle them</h2>
+<div class="tw"><table>
+<tr><th>Edge case</th><th>What could go wrong</th><th>How we handle it</th></tr>
+<tr><td>Duplicate events (retries)</td><td>A login counted twice gives a false brute-force alert</td><td>Dedup on <code>event_id</code> in open windows. The lake and scoreboard count distinct IDs. Alerts are upserts.</td></tr>
+<tr><td>Out-of-order events</td><td>An event counted in the wrong minute</td><td>Event-time windows plus a 10 s lateness allowance</td></tr>
+<tr><td>Very late events</td><td>Windows never close, and memory grows</td><td>The watermark drops them, and they are counted as "late" on the dashboard</td></tr>
+<tr><td>Future timestamps (broken clock)</td><td>The watermark jumps ahead and all honest events look late</td><td>More than 60 s in the future → DLQ</td></tr>
+<tr><td>Invalid or malformed events</td><td>Bad data reaches storage</td><td>Schema validation at ingest and again in the processor. Failures go to the DLQ with the reason.</td></tr>
+<tr><td>Idle input</td><td>The last windows never close</td><td>After 5 idle seconds the watermark follows the wall clock</td></tr>
+<tr><td>Processor crash</td><td>Lost windows, or repeated alerts</td><td>Commits only past closed windows, a checkpoint in commit metadata, deterministic alert IDs</td></tr>
+<tr><td>Ingest down or busy</td><td>Events lost at the source</td><td>Shipper retries with backoff, and the bounded queue counts drops</td></tr>
+<tr><td>Kafka broker hiccups</td><td>Duplicates inside Kafka</td><td><code>acks=all</code> plus idempotent producers</td></tr>
+<tr><td>Overlapping sliding windows</td><td>6 alerts for one attack</td><td>Suppression while an overlapping window has already alerted</td></tr>
+<tr><td>Alert updated several times</td><td>Duplicate rows in Postgres</td><td>The same <code>alert_id</code> is upserted (early → escalated → final)</td></tr>
+<tr><td>Slow storage</td><td>Detection waits on disk I/O</td><td>A separate consumer group per layer</td></tr>
+<tr><td>Half-written Parquet file</td><td>A reader crashes or reads partial data</td><td>Write to a temporary name, then an atomic rename</td></tr>
+<tr><td>Late event in the lake</td><td>Stored in the wrong hour folder</td><td>Partitioned by event time, not write time</td></tr>
+<tr><td>Timezones</td><td>Partition pruning skips the right folder (an IST vs UTC bug we hit)</td><td>All partitions use UTC, and times are converted to UTC before pruning</td></tr>
+<tr><td>LLM down or slow, or no key</td><td>No summaries, or blocked detection</td><td>Runs off the detection path, with a template fallback</td></tr>
+<tr><td>Stale summary</td><td>An old summary shown for an incident that has changed</td><td>The summary is tied to the incident's <code>updated_at</code> version</td></tr>
+<tr><td>Low traffic, batch waiting</td><td>The processor waits to fill a batch, adding latency</td><td>The poll wait was cut to 0.1 s, taking p50 from 272 ms to 41 ms</td></tr>
+<tr><td>Measurement races</td><td>Fake "events lost"</td><td>Reads are ordered: shippers first, then Kafka</td></tr>
+<tr><td>Thread safety</td><td>Kafka clients corrupted across threads</td><td>Each consumer is used only from one thread</td></tr>
+<tr><td>Normal traffic that looks hostile</td><td>False alarms</td><td>Measured as hard cases, with documented mitigations</td></tr>
+</table></div>
+
+<!-- ================================================================ -->
+<h2 id="s17"><span class="num">17</span>Results</h2>
+<p>These were measured on a laptop (Intel i5-1335U, 8 GB RAM) with background traffic plus attack bursts.</p>
+<div class="tw"><table>
+<tr><th>Metric</th><th>Result</th></tr>
+<tr><td>Detection latency (event ingested → alert)</td><td>p50 ≈ 50 ms, max ≈ 110 ms</td></tr>
+<tr><td>Mean time to detect (campaign start → first alert)</td><td>0.53 s</td></tr>
+<tr><td>Early alerting advantage</td><td>60–70 s sooner than window close</td></tr>
+<tr><td>Attack seen before first alert</td><td>5% (injection) to ≈ 55% (scans)</td></tr>
+<tr><td>Alert reduction</td><td>1,248 events → 40 alerts → 26 incidents</td></tr>
+<tr><td>Recall / precision (with hard cases)</td><td>97.6% / 85%</td></tr>
+<tr><td>False alarms on employee traffic</td><td>0</td></tr>
+<tr><td>Completeness</td><td>3,857 shipped = 3,857 in Kafka, 0 lost</td></tr>
+<tr><td>Freshness</td><td>detection ≈ 70 ms · warehouse ≈ 1 s · lake ≤ 30 s</td></tr>
+<tr><td>Storage</td><td>Parquet ≈ 5.2× smaller than JSON</td></tr>
+<tr><td>Duplicates</td><td>Sent twice → counted once</td></tr>
+<tr><td>Restart</td><td>0 lost, 0 re-emitted</td></tr>
+<tr><td>Tests</td><td>46 unit tests + 3 end-to-end suites, all passing</td></tr>
+</table></div>
+
+<!-- ================================================================ -->
+<h2 id="s18"><span class="num">18</span>What is novel or interesting</h2>
+<div class="grid">
+<div class="card"><h4>Defended systems write the logs</h4><p>Most student SIEMs have the attack generator write fake log lines directly. Ours sends real traffic, the victims log what they observe, and the kernel supplies source IPs. That is how real SIEMs are fed.</p></div>
+<div class="card"><h4>Built-in self-grading</h4><p>Ground truth on an isolated topic, and a live scoreboard with MTTD, funnel, attack-seen-before-alert and honest precision/recall.</p></div>
+<div class="card"><h4>Honest hard cases</h4><p>We deliberately included an attack we miss and two false alarms, each explained, instead of showing a misleading 100%.</p></div>
+<div class="card"><h4>Early alerting with correctness</h4><p>Because every rule measures something that only grows, the system alerts in milliseconds and never has to retract, then refines the same alert ID.</p></div>
+<div class="card"><h4>Panes for sliding windows</h4><p>Each event is stored once, not six times. This is a known stream-processing optimisation, implemented by hand.</p></div>
+<div class="card"><h4>Effectively-once results</h4><p>At-least-once delivery, dedup, deterministic IDs and upserts, plus a commit protocol that recovers without re-alerting.</p></div>
+<div class="card"><h4>Lake used for analytics</h4><p>The scoreboard runs a partition-pruned Parquet query, so the lake isn't just an archive.</p></div>
+<div class="card"><h4>Pipeline observability</h4><p>Reconciliation across stages, freshness per layer, lag per consumer group, measured compression.</p></div>
+<div class="card"><h4>Chaos mode on demand</h4><p>One switch injects duplicates, delays and late data live, so the dedup and watermark can be seen working.</p></div>
+<div class="card"><h4>ATT&amp;CK-based incident chaining</h4><p>A session window plus tactic counting turns many alerts into one multi-stage story, which the LLM then explains.</p></div>
+</div>
+
+<!-- ================================================================ -->
+<h2 id="s19"><span class="num">19</span>Limitations (be honest about these)</h2>
+<div class="tw"><table>
+<tr><th>Limitation</th><th>Why it exists</th><th>How it would be fixed</th></tr>
+<tr><td>One processor instance</td><td>The global watermark and per-user rules need all partitions</td><td>A keyed shuffle (re-partition by rule key), or Flink</td></tr>
+<tr><td>Single Kafka broker, no replication</td><td>One laptop</td><td>A 3-broker cluster with replication factor 3</td></tr>
+<tr><td>Static thresholds</td><td>Simple and explainable</td><td>Per-user or per-IP baselines, graded with the same scoreboard</td></tr>
+<tr><td>Low-and-slow attacks are missed</td><td>A 60 s window is too short</td><td>Longer windows or long-term counters per account</td></tr>
+<tr><td>NAT and admin false alarms</td><td>The rules know nothing about assets</td><td>Asset inventory and allow-lists</td></tr>
+<tr><td>No maximum-throughput benchmark yet</td><td>Deferred; results would also depend on the machine</td><td>A load test that finds the sustained events/s</td></tr>
+<tr><td>Small files in the lake</td><td>Frequent 30 s flushes</td><td>A compaction job that merges an hour's files</td></tr>
+<tr><td>The lake can hold duplicates after a crash</td><td>At-least-once writes</td><td>Readers dedup on event_id (done), or a table format such as Iceberg or Delta</td></tr>
+<tr><td>Simulated traffic, on loopback</td><td>Safe, reproducible lab</td><td>Feed real logs (Zeek, Suricata, Windows events) through the same contract</td></tr>
+<tr><td>The sensor terminates connections itself</td><td>Simpler than packet capture</td><td>A passive tap or Zeek</td></tr>
+<tr><td>127.x binding works on Linux only</td><td>macOS routes only 127.0.0.1</td><td>Loopback aliases, or containers</td></tr>
+<tr><td>Scoreboard matching uses IP + time</td><td>A heuristic</td><td>Tag events with a campaign ID in a hidden test field</td></tr>
+<tr><td>Incidents keyed by IP</td><td>Simple session key</td><td>Entity graphs that link IPs to users to hosts</td></tr>
+<tr><td>No authentication on the UIs or APIs</td><td>A demo on localhost</td><td>Logins plus role-based access</td></tr>
+<tr><td>Only signature-based injection detection</td><td>Regexes are easy to evade with encoding tricks</td><td>A WAF-grade parser or a learned model</td></tr>
+</table></div>
+
+<!-- ================================================================ -->
+<h2 id="s20"><span class="num">20</span>Testing</h2>
+<div class="tw"><table>
+<tr><th>Suite</th><th>What it checks</th><th>Needs</th></tr>
+<tr><td><code>tests/test_processor.py</code> (46 tests)</td><td>Windows, panes, watermark, dedup, every rule, early/escalated/final, suppression, restart, injection regex</td><td>Nothing (pure Python)</td></tr>
+<tr><td><code>tests/smoke_test.py</code></td><td>Ingest validation, DLQ, keying</td><td>Kafka + ingest</td></tr>
+<tr><td><code>tests/e2e_processor.py</code></td><td>Processor end to end: rules, dedup, late events, DLQ, restart</td><td>Kafka + ingest</td></tr>
+<tr><td><code>tests/e2e_platform.py</code></td><td>The whole demo: every scenario detected, no employee alerts, the known false alarms, latency, 0 lost, compression, incidents, summaries, scoreboard</td><td>Everything running</td></tr>
+</table></div>
+
+<!-- ================================================================ -->
+<h2 id="s21"><span class="num">21</span>Running it and the demo flow</h2>
+<pre><code>sudo systemctl start postgresql   # if it's not running
+./scripts/start.sh                # Kafka, topics, 8 services, both UIs
+./scripts/reset.sh                # (optional, services stopped) clean slate
+./scripts/stop.sh                 # stop everything, including Kafka
+</code></pre>
+<p>Red console: <code>http://localhost:5173</code> · SOC dashboard: <code>http://localhost:5174</code> · logs: <code>logs/&lt;service&gt;.log</code></p>
+<h3>Five-minute demo</h3>
+<ol>
+<li>Start <b>Low-and-Slow</b> first, because it takes about 3 minutes.</li>
+<li>Show background traffic: throughput moves, and there are no alerts.</li>
+<li><b>Brute force:</b> an alert within about 100 ms, tagged T1110.001, which then escalates.</li>
+<li><b>Port scan</b> and <b>host sweep:</b> the sensor sees what the website can't.</li>
+<li><b>Multi-stage intrusion:</b> one critical incident with an AI summary.</li>
+<li>Turn on <b>Unreliable network:</b> the duplicate and late counters rise, and alert counts stay correct.</li>
+<li><b>Hard cases:</b> low-and-slow was missed; the admin scan and office NAT raise false alarms, each explained.</li>
+<li><b>Scoreboard</b> and <b>pipeline health:</b> MTTD, funnel, 0 lost, freshness, compression.</li>
+</ol>
+
+<!-- ================================================================ -->
+<h2 id="s22"><span class="num">22</span>Glossary</h2>
+<div class="tw"><table>
+<tr><th>Term</th><th>Simple meaning</th></tr>
+<tr><td>SIEM</td><td>A system that collects security logs and detects attacks in them</td></tr>
+<tr><td>SOC</td><td>Security Operations Centre: the team (and screens) watching for attacks</td></tr>
+<tr><td>Event time / ingest time</td><td>When something happened / when our system received it</td></tr>
+<tr><td>Window / pane</td><td>A time range we count over / the 10 s building block that windows are made of</td></tr>
+<tr><td>Watermark</td><td>"Time up to which I believe all data has arrived"</td></tr>
+<tr><td>Partition / key</td><td>A Kafka topic is split into partitions. Messages with the same key always go to the same one, in order.</td></tr>
+<tr><td>Consumer group / offset</td><td>An independent reader of a topic / its bookmark</td></tr>
+<tr><td>At-least-once / effectively-once</td><td>Nothing is lost but there may be repeats / repeats are harmless because writes are idempotent</td></tr>
+<tr><td>Idempotent / upsert</td><td>Doing it twice has the same effect as once / insert, or update if it already exists</td></tr>
+<tr><td>DLQ</td><td>Dead-letter queue: where invalid messages go, with the reason</td></tr>
+<tr><td>Parquet / columnar</td><td>A file format that stores each column together, so it compresses well and scans fast</td></tr>
+<tr><td>Partition pruning</td><td>Skipping folders that can't contain the data you need</td></tr>
+<tr><td>MITRE ATT&amp;CK</td><td>A public catalogue of attacker tactics and techniques</td></tr>
+<tr><td>MTTD</td><td>Mean time to detect</td></tr>
+<tr><td>Precision / recall</td><td>Of our alerts, how many were real / of real attacks, how many we caught</td></tr>
+<tr><td>Session window</td><td>A group that stays open while activity continues and closes after a quiet gap</td></tr>
+</table></div>
+<p style="margin-top:40px;color:var(--muted);font-size:14px">Group 4 · B23EE1094, B23ES1032, B23EE1041</p>
+</main>
+</div>
+<script>
+(function(){
+  var r=document.documentElement,k='siem-guide-theme';
+  try{var s=localStorage.getItem(k);if(s)r.setAttribute('data-theme',s);}catch(e){}
+  document.getElementById('tg').onclick=function(){
+    var dark=r.getAttribute('data-theme')?r.getAttribute('data-theme')==='dark':matchMedia('(prefers-color-scheme: dark)').matches;
+    var n=dark?'light':'dark';r.setAttribute('data-theme',n);
+    try{localStorage.setItem(k,n);}catch(e){}
+  };
+})();
+</script>
+</body>
+</html>

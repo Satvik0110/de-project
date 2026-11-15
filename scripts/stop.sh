@@ -6,7 +6,9 @@ for f in logs/*.pid; do
   [ -f "$f" ] || continue
   pid=$(cat "$f"); name=$(basename "$f" .pid)
   if kill -0 "$pid" 2>/dev/null; then
-    pkill -TERM -P "$pid" 2>/dev/null; kill -TERM "$pid" && echo "  stopped $name"
+    kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid"   # whole process group
+    for _ in $(seq 20); do kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
+    echo "  stopped $name"
   fi
   rm -f "$f"
 done

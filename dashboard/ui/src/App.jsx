@@ -6,7 +6,7 @@ import PerfCharts from './components/PerfCharts.jsx'
 import AlertsFeed from './components/AlertsFeed.jsx'
 import Incidents from './components/Incidents.jsx'
 import Scoreboard from './components/Scoreboard.jsx'
-import StorageStrip from './components/StorageStrip.jsx'
+import PipelineHealth from './components/PipelineHealth.jsx'
 
 const RANK = { early: 0, escalated: 1, final: 2 }
 const WINDOW_MS = 15 * 60 * 1000
@@ -26,11 +26,13 @@ function mergeAlerts(prev, list, live) {
     if (isNewer(a, next.get(a.alert_id))) next.set(a.alert_id, live ? { ...a, live: true } : a)
   }
   if (next.size <= MAX_ALERTS) return next
-  const keep = [...next.values()].sort(byDetectedDesc).slice(0, MAX_ALERTS)
+  const keep = [...next.values()].sort(byFirstDetectedDesc).slice(0, MAX_ALERTS)
   return new Map(keep.map((a) => [a.alert_id, a]))
 }
 
-const byDetectedDesc = (a, b) => ((a.detected_at ?? '') < (b.detected_at ?? '') ? 1 : -1)
+// The feed is ordered by when an alert FIRST fired; later versions update it in place.
+const firstAt = (a) => a.first_detected_at ?? a.detected_at ?? ''
+const byFirstDetectedDesc = (a, b) => (firstAt(a) < firstAt(b) ? 1 : -1)
 
 function mergeMetrics(prev, list) {
   const byAt = new Map(prev.map((m) => [m.at, m]))
@@ -64,7 +66,7 @@ export default function App() {
   const status = useLive(onMessage, seed)
   const summary = usePoll('/api/summary', 5000, alertTick)
   const latest = metrics.at(-1) ?? summary?.metrics ?? null
-  const alertList = [...alerts.values()].sort(byDetectedDesc)
+  const alertList = [...alerts.values()].sort(byFirstDetectedDesc)
 
   return (
     <div className="app">
@@ -91,11 +93,11 @@ export default function App() {
           <AlertsFeed alerts={alertList} />
           <PerfCharts history={metrics} latest={latest} />
         </div>
+        <PipelineHealth warehouse={summary?.warehouse} />
         <div className="grid-2">
           <Incidents refreshKey={alertTick} />
           <Scoreboard refreshKey={alertTick} />
         </div>
-        <StorageStrip summary={summary} />
       </main>
     </div>
   )

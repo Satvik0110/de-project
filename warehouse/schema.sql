@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS incidents (
     tactics         text[]      NOT NULL DEFAULT '{}',-- in order of first appearance
     rules           text[]      NOT NULL DEFAULT '{}',
     alert_count     integer     NOT NULL DEFAULT 0,
+    events          integer     NOT NULL DEFAULT 0,       -- sum of alert counts
     updated_at      timestamptz NOT NULL DEFAULT now(),
     summary         text,
     summary_source  text,                             -- llm | template
@@ -71,7 +72,8 @@ CREATE TABLE IF NOT EXISTS pipeline_metrics (
     latency_p50_ms    double precision,
     latency_p95_ms    double precision,
     latency_p99_ms    double precision,
-    raw               jsonb NOT NULL
+    raw               jsonb NOT NULL,
+    ingested_at       timestamptz NOT NULL DEFAULT now()   -- minus "at" = warehouse write delay
 );
 
 -- Ground truth from the attack simulator. Never read by the detection path;
@@ -79,6 +81,7 @@ CREATE TABLE IF NOT EXISTS pipeline_metrics (
 CREATE TABLE IF NOT EXISTS campaigns (
     campaign_id     uuid PRIMARY KEY,
     scenario        text        NOT NULL,
+    malicious       boolean     NOT NULL DEFAULT true,   -- false: benign activity that looks suspicious
     attacker_ips    inet[]      NOT NULL,
     target_user     text,
     expected_rules  text[]      NOT NULL,
@@ -86,3 +89,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
     ended_at        timestamptz,
     requests        integer
 );
+-- upgrade path for databases created before the column existed
+ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS malicious boolean NOT NULL DEFAULT true;
+ALTER TABLE pipeline_metrics ADD COLUMN IF NOT EXISTS ingested_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE incidents ADD COLUMN IF NOT EXISTS events integer NOT NULL DEFAULT 0;

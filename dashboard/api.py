@@ -11,31 +11,27 @@ import asyncio
 import json
 import logging
 import os
-import statistics
 import threading
 import uuid
 from contextlib import asynccontextmanager
-from datetime import timedelta
-from pathlib import Path
 
 import psycopg
-import pyarrow.parquet as pq
 from confluent_kafka import Consumer
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from psycopg.rows import dict_row
 
 from ingest.config import KAFKA_BOOTSTRAP
-from lake.writer import LAKE_DIR
 from processor.config import GROUP_ID, TOPIC_ALERTS, TOPIC_METRICS
 
-from . import summariser
+from . import pipeline, scoring, summariser
 
 DSN = os.getenv("WAREHOUSE_DSN", "postgresql://secops:secops@localhost:5432/secops")
-GRACE = timedelta(seconds=120)   # an alert counts for a campaign if raised up to this long after it ended
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 sockets: set[WebSocket] = set()
+health: dict = {}               # latest pipeline.collect(), refreshed every 5 s by one task
+log = logging.getLogger("dashboard")
 
 
 # ------------------------------------------------------------------ live bridge
@@ -71,10 +67,23 @@ async def broadcast(msg: dict) -> None:
 async def lifespan(app: FastAPI):
     stop = threading.Event()
     threading.Thread(target=kafka_bridge, args=(asyncio.get_running_loop(), stop), daemon=True).start()
-    task = asyncio.create_task(summariser.run())
+    tasks = [asyncio.create_task(summariser.run()), asyncio.create_task(collect_health())]
     yield
     stop.set()
-    task.cancel()
+    for t in tasks:
+        t.cancel()
+
+
+async def collect_health() -> None:
+    while True:
+        try:
+            m = await query("SELECT raw FROM pipeline_metrics ORDER BY at DESC LIMIT 1")
+            d = await query("SELECT avg(extract(epoch FROM ingested_at - at)) s FROM pipeline_metrics "
+                            "WHERE at > now() - interval '1 minute'")
+            health.update(await asyncio.to_thread(pipeline.collect, m[0]["raw"] if m else None, d[0]["s"]))
+        except Exception as exc:
+            log.warning("pipeline health: %s", exc)
+        await asyncio.sleep(5)
 
 
 app = FastAPI(title="SOC dashboard API", lifespan=lifespan)
@@ -102,6 +111,7 @@ async def query(sql: str, params=()) -> list[dict]:
 def alert_view(r: dict) -> dict:
     a = r["raw"]
     a["incident_id"] = str(r["incident_id"]) if r["incident_id"] else None
+    a["first_detected_at"] = r["first_detected_at"]       # older alerts predate the field
     return a
 
 
@@ -110,18 +120,6 @@ def incident_view(r: dict) -> dict:
             "last_seen": r["last_seen"], "severity": r["severity"], "tactics": r["tactics"],
             "rules": r["rules"], "alert_count": r["alert_count"], "multi_stage": len(r["tactics"]) >= 2,
             "summary": r["summary"], "summary_source": r["summary_source"]}
-
-
-_lake_rows: dict[str, int] = {}   # parquet files are immutable: read each footer once
-
-
-def lake_stats() -> dict:
-    files = list(Path(LAKE_DIR).rglob("*.parquet"))
-    for f in files:
-        if str(f) not in _lake_rows:
-            _lake_rows[str(f)] = pq.read_metadata(f).num_rows
-    return {"files": len(files), "bytes": sum(f.stat().st_size for f in files),
-            "rows": sum(_lake_rows[str(f)] for f in files)}
 
 
 @app.get("/api/summary")
@@ -137,7 +135,14 @@ async def summary():
             "alerts_by_severity": {r["severity"]: r["n"] for r in sev},
             "alerts_by_rule": {r["rule_name"]: r["n"] for r in rule},
             "incidents": {"total": inc[0]["total"], "multi_stage": inc[0]["multi"]},
-            "lake": await asyncio.to_thread(lake_stats), "warehouse": counts}
+            "lake": {k: (health.get("storage") or {}).get(f"lake_{k}", 0) for k in ("files", "rows")}
+                    | {"bytes": (health.get("storage") or {}).get("parquet_bytes", 0)},
+            "warehouse": counts}
+
+
+@app.get("/api/pipeline")
+async def pipeline_health():
+    return health or {"reconciliation": None, "tiers": [], "storage": None}
 
 
 @app.get("/api/metrics")
@@ -149,7 +154,7 @@ async def metrics(minutes: int = 15):
 
 @app.get("/api/alerts")
 async def alerts(limit: int = 100):
-    rows = await query("SELECT raw, incident_id FROM alerts ORDER BY first_detected_at DESC LIMIT %s", (limit,))
+    rows = await query("SELECT raw, incident_id, first_detected_at FROM alerts ORDER BY first_detected_at DESC LIMIT %s", (limit,))
     return [alert_view(r) for r in rows]
 
 
@@ -163,7 +168,7 @@ async def incident(incident_id: uuid.UUID):
     rows = await query("SELECT * FROM incidents WHERE incident_id = %s", (incident_id,))
     if not rows:
         raise HTTPException(404, "no such incident")
-    alerts_ = await query("SELECT raw, incident_id FROM alerts WHERE incident_id = %s ORDER BY first_event_time",
+    alerts_ = await query("SELECT raw, incident_id, first_detected_at FROM alerts WHERE incident_id = %s ORDER BY first_event_time",
                           (incident_id,))
     return {**incident_view(rows[0]), "alerts": [alert_view(a) for a in alerts_]}
 
@@ -176,54 +181,13 @@ async def aggregates(minutes: int = 30):
 
 @app.get("/api/scoreboard")
 async def scoreboard():
-    """Grade detection against the simulator's ground truth.
-
-    A campaign's expected rule is detected if an alert for that rule names one of the
-    campaign's attacker IPs (or its target account, for per-user rules) and was raised
-    between the campaign start and DETECT_GRACE_S after its end. Time-to-detect is the
-    first such alert's detection time minus the campaign start. An alert that matches
-    no campaign at all came from benign traffic: a false positive.
-    """
-    camps = await query("SELECT campaign_id, scenario, ARRAY(SELECT host(x) FROM unnest(attacker_ips) x) ips, target_user, expected_rules, "
-                        "started_at, ended_at FROM campaigns ORDER BY started_at DESC")
+    camps = await query("SELECT campaign_id, scenario, malicious, ARRAY(SELECT host(x) FROM unnest(attacker_ips) x) ips, "
+                        "target_user, expected_rules, started_at, ended_at, requests FROM campaigns ORDER BY started_at DESC")
     since = min((c["started_at"] for c in camps), default=None)
-    alerts_ = await query("SELECT raw, incident_id, rule_name, host(src_ip) src_ip, username, first_detected_at "
-                          "FROM alerts WHERE %s::timestamptz IS NULL OR first_detected_at >= %s - interval '1 minute'",
-                          (since, since))
-    attributed: set = set()
-    out = []
-    for c in camps:
-        ips = set(c["ips"])
-        end = c["ended_at"] or (await query("SELECT now() n"))[0]["n"]
-        hits = [a for a in alerts_
-                if (a["src_ip"] in ips or (a["src_ip"] is None and a["username"] == c["target_user"]))
-                and c["started_at"] <= a["first_detected_at"] <= end + GRACE]
-        attributed.update(id(a) for a in hits)
-        expected = c["expected_rules"]
-        detected = sorted({a["rule_name"] for a in hits} & set(expected))
-        first = min((a["first_detected_at"] for a in hits if a["rule_name"] in expected), default=None)
-        out.append({"campaign_id": str(c["campaign_id"]), "scenario": c["scenario"], "started_at": c["started_at"],
-                    "ended_at": c["ended_at"], "attacker_ips": c["ips"], "expected_rules": expected,
-                    "detected_rules": detected, "missed_rules": [r for r in expected if r not in detected],
-                    "detected": bool(detected),
-                    "ttd_ms": round((first - c["started_at"]).total_seconds() * 1000) if first else None})
-
-    by = {}
-    for c in out:
-        by.setdefault(c["scenario"], []).append(c)
-    by_scenario = [{"scenario": s, "campaigns": len(cs), "detected": sum(c["detected"] for c in cs),
-                    "detection_rate": sum(c["detected"] for c in cs) / len(cs),
-                    "median_ttd_ms": _median([c["ttd_ms"] for c in cs])} for s, cs in by.items()]
-    fps = [a for a in alerts_ if id(a) not in attributed]
-    expected_n = sum(len(c["expected_rules"]) for c in out)
-    return {"campaigns": out[:50], "by_scenario": by_scenario, "alerts_total": len(alerts_),
-            "true_positive_alerts": len(alerts_) - len(fps), "false_positive_alerts": len(fps),
-            "precision": (len(alerts_) - len(fps)) / len(alerts_) if alerts_ else None,
-            "recall": sum(len(c["detected_rules"]) for c in out) / expected_n if expected_n else None,
-            "median_ttd_ms": _median([c["ttd_ms"] for c in out]),
-            "false_positives": [alert_view(a) for a in fps[:50]]}
-
-
-def _median(xs):
-    xs = [x for x in xs if x is not None]
-    return statistics.median(xs) if xs else None
+    rows = await query("SELECT raw, incident_id, rule_name, host(src_ip) src_ip, username, first_detected_at, window_end "
+                       "FROM alerts WHERE %s::timestamptz IS NULL OR first_detected_at >= %s::timestamptz - interval '1 minute'",
+                       (since, since))
+    alerts_ = [{**r, "view": alert_view(dict(r, raw=dict(r["raw"])))} for r in rows]
+    newest = max((f["newest_event"] for f in pipeline.lake_files() if f["newest_event"]), default=None)
+    events_total = (health.get("reconciliation") or {}).get("in_kafka", 0)
+    return await asyncio.to_thread(scoring.score, camps, alerts_, newest, events_total)

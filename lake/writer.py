@@ -56,6 +56,7 @@ def to_row(value: bytes, partition: int, offset: int) -> dict:
         "user": ev.get("user"), "status": ev["status"],
         "raw_payload": json.dumps(ev["raw_payload"]) if ev.get("raw_payload") is not None else None,
         "kafka_partition": partition, "kafka_offset": offset,
+        "_json_bytes": len(value),      # not a column: summed into file metadata below
     }
 
 
@@ -71,7 +72,9 @@ def flush(rows: list[dict], lake_dir: Path = LAKE_DIR) -> list[Path]:
         folder.mkdir(parents=True, exist_ok=True)
         path = folder / f"part-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}.parquet"
         tmp = path.with_suffix(".tmp")
-        pq.write_table(pa.Table.from_pylist(part, schema=SCHEMA), tmp, compression="snappy")
+        table = pa.Table.from_pylist(part, schema=SCHEMA).replace_schema_metadata(
+            {"raw_json_bytes": str(sum(r["_json_bytes"] for r in part))})   # for the compression ratio
+        pq.write_table(table, tmp, compression="snappy")
         tmp.rename(path)        # readers never see a half-written file
         written.append(path)
     return written

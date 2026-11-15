@@ -40,7 +40,7 @@ health, and a scoreboard that grades detection against the simulator's ground tr
 
 | Path | What it is |
 |---|---|
-| `simulator/` | **Red team.** 9 attack scenarios plus normal employee traffic. It only *acts*: every actor connects from its own real source IP (Linux routes all of `127.0.0.0/8` to loopback). It publishes ground truth (campaign, attacker IPs, expected rules) to `security.sim.campaigns`. |
+| `simulator/` | **Red team.** 10 attack scenarios (one built to evade detection), 2 benign-but-suspicious scenarios, and normal employee traffic. It only *acts*: every actor connects from its own real source IP (Linux routes all of `127.0.0.0/8` to loopback). It publishes ground truth (campaign, attacker IPs, expected rules) to `security.sim.campaigns`. |
 | `frontend/` | Red-team console: launch attacks, toggle background traffic and "unreliable network", live attack log. |
 | `target/` | The **defended web app** (`/login`, `/api/search`, `/api/export`). Deliberately unprotected. Logs every request as a security event, using the peer IP and status code that the *server* observed. |
 | `sensor/` | **Network sensor.** Listens on the server's service ports and 20 workstations, and logs every TCP connection (open port = `success`, closed = reset and `denied`). It sees the scans the web app never would. |
@@ -105,7 +105,12 @@ never depends on an external API.
 3. **Port Scan**, then **Host Sweep.** The sensor sees connections the web app never would. One is vertical (many ports on one host), the other horizontal (one port on many hosts).
 4. **Multi-Stage Intrusion.** Five alerts from one IP become **one critical incident**: Discovery → Initial Access → Reconnaissance → Credential Access. The summary notes the successful login and recommends actions.
 5. Turn on **Unreliable network.** The *duplicates dropped* and *late dropped* tiles start counting, and alert counts stay correct: that's dedup and the watermark at work.
-6. **Scoreboard:** recall, precision and time-to-detect for every campaign, graded against the simulator's ground truth.
+6. **Hard cases.** Launch **Low-and-Slow** *at the start* of the demo (it runs for ~3 min), then reveal it was **missed**: it is paced below the per-window threshold. **IT Inventory Scan** and **Office NAT Login Rush** are legitimate but raise alerts (false positives). Each has an explanation and a known mitigation.
+7. **Scoreboard and pipeline health:**
+   - MTTD, the alert-reduction funnel, and how much of each attack had happened before the first alert
+   - 0 events lost between stages
+   - freshness and lag for each storage layer
+   - Parquet compression
 
 ---
 
@@ -155,12 +160,23 @@ invalid, alerts by rule). Tail percentiles, not averages, are what matter for al
 
 ## Detection scoreboard
 
-The simulator knows what it launched, so the platform grades itself:
-- **Recall:** expected rules detected for each campaign.
-- **Precision:** alerts attributable to a campaign. Anything else came from benign traffic and counts as a false positive.
-- **Time-to-detect:** first matching alert minus campaign start.
+The simulator knows what it launched, so the platform grades itself. Ground truth travels on its own topic, which the processor never reads.
 
-The ground truth travels on its own topic that the processor never reads, so detection cannot "see the answers".
+- **MTTD:** median time from campaign start to the first alert.
+- **Alert reduction:** attack events → alerts → incidents (e.g. 1,248 → 40 → 26). Suppressing overlapping windows and grouping alerts into incidents is what keeps analysts from drowning in alerts.
+- **Attack seen before alert:** the share of a campaign's events that had already happened when the first alert fired. It is an analytical query over the **Parquet lake**, pruned to the UTC hour partitions the campaign spans.
+- **Earlier than window close:** how much sooner early alerting fires than alerting when the window closes (~60–70 s).
+- **Precision and recall over hard cases:**
+  - an evasive attack: low-and-slow brute force, missed by design
+  - two benign-but-suspicious scenarios: an IT inventory scan raises `port_scan`, and an office NAT login rush raises `password_spray`
+
+  They make precision and recall honest (about 85% precision in the last run), not 100% by construction.
+
+## Pipeline health
+
+- **Completeness:** events the log shippers delivered = events in Kafka = processed = rows in the lake. "Events lost" should be, and was, 0.
+- **Freshness per layer, with consumer lag:** detection ~70 ms, warehouse ~1 s, lake ≤ 30 s (the flush interval). This is the trade-off each layer makes. Every layer is its own consumer group.
+- **Storage:** Parquet is ~5× smaller than the raw JSON it stores (measured from per-file metadata).
 
 ---
 
@@ -173,10 +189,13 @@ python -m tests.e2e_processor                 # processor: rules, dedup, late, D
 python -m tests.e2e_platform                  # whole platform, run like the demo (scripts/start.sh up)
 ```
 
-Last full run: every one of the 9 scenarios raised exactly its expected rules, with no alert
-on employee traffic. Detection latency was p50 41 ms and max 116 ms. Scoreboard recall and
-precision were both 100%, with a median time-to-detect of about 0.6 s from campaign launch
-(that includes the attack itself reaching the threshold).
+Last full run:
+- Every attack raised exactly its expected rules, and there was no alert on employee traffic.
+- Both benign scenarios raised their known false positives, so precision was 0.85.
+- Detection latency was p50 about 50–65 ms, max about 110 ms. MTTD was about 0.53 s from campaign launch, which includes the attack itself reaching the threshold.
+- 0 events were lost between the shippers and Kafka.
+
+`tests/e2e_platform.py` skips low-and-slow because it takes 3 minutes. Run it by hand; it should be missed.
 
 ## Design decisions
 

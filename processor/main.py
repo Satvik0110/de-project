@@ -212,7 +212,11 @@ def main() -> int:
                 delta = engine.stats - prev_stats
                 lag = 0
                 for tp in consumer.assignment():
-                    _, high = consumer.get_watermark_offsets(tp, timeout=2)
+                    try:   # transient (e.g. leader election just after broker start): skip this sample
+                        _, high = consumer.get_watermark_offsets(tp, timeout=2)
+                    except KafkaException as exc:
+                        log.warning("lag for partition %d unavailable: %s", tp.partition, exc)
+                        continue
                     pos = consumer.position([tp])[0].offset
                     lag += max(high - pos, 0) if pos >= 0 else 0
                 m = {

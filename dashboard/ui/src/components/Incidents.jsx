@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { getJSON, usePoll } from '../api.js'
 import Panel, { Sev, Waiting } from './Panel.jsx'
-import { fmtMs, fmtSpan, fmtTime } from '../format.js'
+import { firstDetected, fmtMs, fmtSpan, fmtTime } from '../format.js'
 
 const Chain = ({ tactics }) => (
   <div className="chain">
@@ -57,7 +57,7 @@ function IncidentDetail({ id, onClose }) {
               <tbody>
                 {(inc.alerts ?? []).map((a) => (
                   <tr key={`${a.alert_id}:${a.trigger}`}>
-                    <td>{fmtTime(a.detected_at)}</td>
+                    <td>{fmtTime(firstDetected(a))}</td>
                     <td><Sev level={a.severity} /></td>
                     <td className="rule">{a.rule_name}</td>
                     <td>{a.technique} · {a.tactic}</td>

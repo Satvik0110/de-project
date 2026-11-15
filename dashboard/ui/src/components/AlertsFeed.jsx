@@ -1,5 +1,5 @@
 import Panel, { Sev, Waiting } from './Panel.jsx'
-import { fmtMs, fmtTime } from '../format.js'
+import { firstDetected, fmtMs, fmtTime } from '../format.js'
 
 export default function AlertsFeed({ alerts }) {
   return (
@@ -17,7 +17,12 @@ export default function AlertsFeed({ alerts }) {
                 <span className="attck">
                   {a.technique} · {a.tactic}
                 </span>
-                <span className="alert-time">{fmtTime(a.detected_at)}</span>
+                <span className="alert-time">
+                  {fmtTime(firstDetected(a))}
+                  {fmtTime(a.detected_at) !== fmtTime(firstDetected(a)) && (
+                    <span className="updated">updated {fmtTime(a.detected_at)}</span>
+                  )}
+                </span>
               </div>
               <div className="alert-bottom">
                 <code className="entity">{a.entity}</code>

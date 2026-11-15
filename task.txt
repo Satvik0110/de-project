@@ -1,0 +1,14 @@
+Tasks: 
+1. Summarize your complete progress in a neat 1500 word note including diagrams and tables indicating results
+2. Your report needs to present the status of project metrics like: sprint burnup, sprint burndown, sprint throughput, cumulative flow diagram, cycle time, and velocity
+3. Project_tracker sheet that is in sync with your progress.
+
+Submission:
+1. Please name your file <Lab4-10_GroupNo.pdf> -- comprising your progress report & tracker -- only one file should be submitted.
+2. Your summary should be very neat and strictly not more than 2000 words -- include references to research + white papers + patents in your chosen area.
+
+For the final project report -- please submit a summary of all that has been done, your results etc.
+Needn't be lab 4,5 and lab 9,10 separate.
+
+A summary of the entire project with the metrics, results etc should be sufficient.
+Should not be more than 1500 words (excluding images and references).

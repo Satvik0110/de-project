@@ -22,7 +22,9 @@ export default function CampaignsPanel({ campaigns }) {
         {campaigns.map((c) => (
           <div key={c.campaign_id} className="table-row campaign-row">
             <span className={`badge-status ${c.status}`}>{c.status}</span>
-            <span>{c.scenario}</span>
+            <span>
+              {c.malicious === false && <span className="attack-chip benign">Benign</span>} {c.scenario}
+            </span>
             <span className="cell" title={c.attacker_ips.join(', ')}>
               {c.attacker_ips.join(', ')}
             </span>

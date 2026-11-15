@@ -47,7 +47,7 @@ class Hub:
         self.running: dict[str, dict] = {}                 # scenario id -> campaign
         self.stats = Counter()
         self.sockets: set[WebSocket] = set()
-        self.next_ip = 1
+        self.next_ip = 0
         self.producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP, "acks": "all",
                                   "enable.idempotence": True})
 
@@ -76,7 +76,8 @@ class Hub:
     def state(self) -> dict:
         return {"background": self.background, "chaos": self.chaos,
                 "scenarios": [{"id": s.id, "name": s.name, "tactic": s.tactic, "technique": s.technique,
-                               "description": s.description, "expected_rules": list(s.expected)}
+                               "description": s.description, "expected_rules": list(s.expected),
+                               "malicious": s.malicious, "duration_s": s.duration_s}
                               for s in SCENARIOS],
                 "campaigns": list(self.campaigns), "stats": self.stats_view()}
 
@@ -87,13 +88,11 @@ class Hub:
     # -- campaigns ---------------------------------------------------------------
     async def launch(self, scenario_id: str) -> dict:
         sc = BY_ID[scenario_id]
-        if sc.botnet:
-            n = self.next_ip
-            ips = [f"127.77.{n % 250}.{i + 1}" for i in range(sc.botnet)]
-        else:
-            ips = [f"127.66.{self.next_ip // 250}.{self.next_ip % 250 + 1}"]
-        self.next_ip += 1
-        campaign = {"campaign_id": str(uuid.uuid4()), "scenario": sc.id, "status": "running",
+        n = self.next_ip = self.next_ip + 1     # a fresh identity per campaign keeps scoring unambiguous
+        ips = [f"127.77.{n % 250}.{i + 1}" for i in range(sc.botnet)] if sc.botnet \
+            else [f"{sc.subnet}.{n % 250 + 1}"]
+        campaign = {"campaign_id": str(uuid.uuid4()), "scenario": sc.id, "malicious": sc.malicious,
+                    "status": "running",
                     "started_at": now_iso(), "ended_at": None, "attacker_ips": ips,
                     "target_user": sc.target_user, "expected_rules": list(sc.expected), "requests": 0}
         self.running[sc.id] = campaign
@@ -104,7 +103,8 @@ class Hub:
         return campaign
 
     async def _run(self, sc, campaign: dict) -> None:
-        actors = [Actor(ip, "attack", self.on_request, campaign) for ip in campaign["attacker_ips"]]
+        team = "attack" if sc.malicious else "normal"
+        actors = [Actor(ip, team, self.on_request, campaign) for ip in campaign["attacker_ips"]]
         try:
             await sc.run(Campaign(actors))
         except Exception:

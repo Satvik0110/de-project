@@ -280,6 +280,42 @@ input:checked + .slider-switch:before { transform: translateX(22px); }
   text-transform: uppercase;
 }
 
+.attack-chip.benign {
+  background: var(--status-fail-dim);
+  color: var(--status-fail);
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.tag.duration {
+  background: var(--bg-surface-elevated);
+  color: var(--text-secondary);
+  border-color: var(--border-subtle);
+}
+
+.btn-attack.benign {
+  border-style: dashed;
+}
+
+.btn-attack.benign:hover:not(:disabled) {
+  border-color: var(--status-fail);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.2);
+}
+
+.group-title {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--border-subtle);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.group-title.benign { color: var(--status-fail); }
+
 .mono { font-family: var(--font-mono); }
 
 .attack-btn-desc {
